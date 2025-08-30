@@ -1,37 +1,44 @@
 # holdings.py
 import streamlit as st
 import pandas as pd
-from definedge_api import DefinedgeClient
 
-st.title("📊 Holdings (NSE Only)")
+st.title("📊 Holdings Page (Debug Mode)")
 
 client = st.session_state.get("client")
-if not client or not client.api_session_key:
-    st.error("⚠️ Please login first.")
+if not client:
+    st.error("⚠️ Not logged in")
     st.stop()
+
+st.write("🔎 Debug: Current session_state keys:", list(st.session_state.keys()))
 
 try:
     resp = client.get_holdings()
+    st.write("🔎 Debug: Raw holdings API response:", resp)
 
     if resp.get("status") != "SUCCESS":
         st.error("⚠️ Holdings API failed")
         st.stop()
 
     raw_data = resp.get("data", [])
+    st.write("🔎 Debug: Extracted data field:", raw_data)
 
-    # Flatten only NSE
+    # ---- Flatten NSE only ----
     records = []
     for h in raw_data:
-        common = {k: v for k, v in h.items() if k != "tradingsymbol"}
+        base = {k: v for k, v in h.items() if k != "tradingsymbol"}
         for ts in h.get("tradingsymbol", []):
             if ts.get("exchange") == "NSE":   # ✅ Only NSE
-                row = {**common, **ts}
+                row = {**base, **ts}
                 records.append(row)
+
+    st.write("🔎 Debug: Flattened records:", records)
 
     if records:
         df = pd.DataFrame(records)
+        st.write(f"🔎 Debug: DataFrame created with shape: {df.shape}")
+        st.write("🔎 Debug: Available columns for display:", list(df.columns))
 
-        # Optional: rename & select clean columns
+        # Clean view
         df = df.rename(columns={
             "dp_qty": "Quantity",
             "avg_buy_price": "Avg Buy Price",
@@ -39,9 +46,10 @@ try:
             "exchange": "Exchange"
         })
 
-        df = df[["Symbol", "Exchange", "Quantity", "Avg Buy Price", "isin"]]
+        cols = ["Symbol", "Exchange", "Quantity", "Avg Buy Price", "isin"]
+        df = df[cols]
 
-        st.success(f"✅ Total NSE Holdings: {len(df)}")
+        st.success(f"✅ NSE Holdings found: {len(df)}")
         st.dataframe(df, use_container_width=True)
     else:
         st.warning("⚠️ No NSE holdings found")
