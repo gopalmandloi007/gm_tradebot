@@ -1,9 +1,10 @@
-# orders.py
+# orderbook.py
 import streamlit as st
 import pandas as pd
+import requests
 
 def show():
-    st.title("📦 Orders Page (All Fields)")
+    st.title("📈 Order Book Page (All Fields)")
 
     client = st.session_state.get("client")
     if not client:
@@ -13,25 +14,40 @@ def show():
     st.write("🔎 Debug: Current session_state keys:", list(st.session_state.keys()))
 
     try:
-        # ✅ Call orders API instead of trades
-        resp = client.get_orders()
-        st.write("🔎 Debug: Raw orders API response:", resp)
-
-        if resp.get("status") != "SUCCESS":
-            st.error("⚠️ Orders API failed")
+        # ---- API call ----
+        api_key = getattr(client, "api_session_key", None)
+        if not api_key:
+            st.error("⚠️ API session key missing. Please login again.")
             st.stop()
 
-        raw_data = resp.get("data", [])
-        st.write("🔎 Debug: Extracted data field:", raw_data)
+        url = "https://api.definedge.com/orders"  # replace with actual base URL
+        headers = {"Authorization": api_key}
+
+        resp = requests.get(url, headers=headers, timeout=10)
+
+        if resp.status_code != 200 or not resp.text.strip():
+            st.error(f"⚠️ API returned error or empty response: {resp.status_code}")
+            st.stop()
+
+        data = resp.json()
+        st.write("🔎 Debug: Raw API response:", data)
+
+        if data.get("status") != "SUCCESS":
+            st.error("⚠️ Order Book API failed")
+            st.stop()
+
+        # ---- Use 'orders' field instead of 'data' ----
+        raw_data = data.get("orders", [])
+        st.write("🔎 Debug: Extracted orders field:", raw_data)
 
         # ---- Flatten all fields (Only NSE) ----
         records = []
-        for order in raw_data:
-            base = {k: v for k, v in order.items() if k != "tradingsymbol"}
-            for ts in order.get("tradingsymbol", []):
-                if ts.get("exchange") == "NSE":   # ✅ Only NSE
-                    row = {**base, **ts}
-                    records.append(row)
+        for o in raw_data:
+            base = {k: v for k, v in o.items() if k != "tradingsymbol"}
+            # tradingsymbol is already present, but keep consistency
+            if "exchange" in o and o["exchange"] == "NSE":
+                row = {**base}  # include tradingsymbol + all fields
+                records.append(row)
 
         st.write("🔎 Debug: Flattened records:", records)
 
@@ -42,5 +58,7 @@ def show():
         else:
             st.warning("⚠️ No NSE orders found")
 
+    except requests.exceptions.RequestException as e:
+        st.error(f"⚠️ Network/API request error: {e}")
     except Exception as e:
-        st.error(f"Orders fetch failed: {e}")
+        st.error(f"⚠️ Something went wrong: {e}")
