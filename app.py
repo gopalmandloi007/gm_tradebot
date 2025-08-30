@@ -1,6 +1,6 @@
 # app.py
 import streamlit as st
-from holdings import show as show_holdings
+from pages.holdings import show as show_holdings
 from orderbook import show_orderbook
 from trades import show_trades
 
