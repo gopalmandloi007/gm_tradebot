@@ -11,15 +11,23 @@ def show():
         st.error("⚠️ Not logged in")
         st.stop()
 
-    try:
-        # ---- Use actual API session key ----
-        api_key = client.api_session_key  # replace with actual attribute
-        url = "https://api.definedge.com/orders"  # Replace with actual base URL + endpoint
-        headers = {
-            "Authorization": api_key
-        }
+    st.write("🔎 Debug: Current session_state keys:", list(st.session_state.keys()))
 
-        resp = requests.get(url, headers=headers)
+    try:
+        # ---- API call using requests ----
+        api_key = getattr(client, "api_session_key", None)
+        if not api_key:
+            st.error("⚠️ API session key missing. Please login again.")
+            st.stop()
+
+        url = "https://api.definedge.com/orders"  # Replace with actual base URL
+        headers = {"Authorization": api_key}
+
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200 or not resp.text.strip():
+            st.error(f"⚠️ API returned error or empty response: {resp.status_code}")
+            st.stop()
+
         data = resp.json()
         st.write("🔎 Debug: Raw API response:", data)
 
@@ -28,14 +36,18 @@ def show():
             st.stop()
 
         raw_data = data.get("data", [])
-        records = []
+        st.write("🔎 Debug: Extracted data field:", raw_data)
 
+        # ---- Flatten all fields (Only NSE) ----
+        records = []
         for o in raw_data:
             base = {k: v for k, v in o.items() if k != "tradingsymbol"}
             for ts in o.get("tradingsymbol", []):
-                if ts.get("exchange") == "NSE":  # Only NSE
+                if ts.get("exchange") == "NSE":   # ✅ Only NSE
                     row = {**base, **ts}
                     records.append(row)
+
+        st.write("🔎 Debug: Flattened records:", records)
 
         if records:
             df = pd.DataFrame(records)
@@ -44,5 +56,7 @@ def show():
         else:
             st.warning("⚠️ No NSE orders found")
 
+    except requests.exceptions.RequestException as e:
+        st.error(f"⚠️ Network/API request error: {e}")
     except Exception as e:
-        st.error(f"Order Book fetch failed: {e}")
+        st.error(f"⚠️ Something went wrong: {e}")
