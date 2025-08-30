@@ -1,1 +1,39 @@
+# frontend/pages/login.py
+import streamlit as st
+from backend.session import SessionManager
 
+st.title("🔑 Login")
+
+if "session" not in st.session_state:
+    st.session_state.session = SessionManager()
+
+login_method = st.radio("Login Method", ["TOTP", "OTP"])
+
+if login_method == "TOTP":
+    if st.button("Login with TOTP"):
+        try:
+            session = st.session_state.session
+            client = session.login_with_totp()
+            st.success("Logged in successfully with TOTP ✅")
+        except Exception as e:
+            st.error(f"Login failed: {e}")
+
+elif login_method == "OTP":
+    mobile = st.text_input("Enter registered mobile number")
+    if st.button("Send OTP"):
+        try:
+            session = st.session_state.session
+            session.send_otp(mobile)
+            st.success("OTP sent! Enter below to verify.")
+
+        except Exception as e:
+            st.error(f"Failed to send OTP: {e}")
+
+    otp = st.text_input("Enter OTP")
+    if st.button("Verify OTP"):
+        try:
+            session = st.session_state.session
+            client = session.login_with_otp(otp)
+            st.success("Logged in successfully with OTP ✅")
+        except Exception as e:
+            st.error(f"Login failed: {e}")
