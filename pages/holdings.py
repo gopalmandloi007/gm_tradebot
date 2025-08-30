@@ -36,10 +36,8 @@ def show():
 
         if records:
             df = pd.DataFrame(records)
-            st.write(f"🔎 Debug: DataFrame created with shape: {df.shape}")
-            st.write("🔎 Debug: Available columns for display:", list(df.columns))
 
-            # Show full table with all fields
+            # ✅ अब full table दिखेगा (कोई slicing नहीं)
             st.success(f"✅ NSE Holdings found: {len(df)}")
             st.dataframe(df, use_container_width=True)
 
