@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 
 def show():
-    st.title("📊 Holdings Page (Debug Mode)")
+    st.title("📊 Holdings Page (All Fields)")
 
     client = st.session_state.get("client")
     if not client:
@@ -23,7 +23,7 @@ def show():
         raw_data = resp.get("data", [])
         st.write("🔎 Debug: Extracted data field:", raw_data)
 
-        # ---- Flatten NSE only ----
+        # ---- Flatten all fields (Only NSE) ----
         records = []
         for h in raw_data:
             base = {k: v for k, v in h.items() if k != "tradingsymbol"}
@@ -39,19 +39,10 @@ def show():
             st.write(f"🔎 Debug: DataFrame created with shape: {df.shape}")
             st.write("🔎 Debug: Available columns for display:", list(df.columns))
 
-            # Clean view
-            df = df.rename(columns={
-                "dp_qty": "Quantity",
-                "avg_buy_price": "Avg Buy Price",
-                "tradingsymbol": "Symbol",
-                "exchange": "Exchange"
-            })
-
-            cols = ["Symbol", "Exchange", "Quantity", "Avg Buy Price", "isin"]
-            df = df[cols]
-
+            # Show full table with all fields
             st.success(f"✅ NSE Holdings found: {len(df)}")
             st.dataframe(df, use_container_width=True)
+
         else:
             st.warning("⚠️ No NSE holdings found")
 
