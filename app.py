@@ -1,39 +1,20 @@
 # app.py
 import streamlit as st
-import os, sys
+from holdings import show as show_holdings
+from orderbook import show as show_orderbook
+from trades import show as show_trades
 
-# ensure repo root is on sys.path when running from Streamlit Cloud
-repo_root = os.path.abspath(os.path.dirname(__file__))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
+# ---- App Config ----
+st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
+st.title("📊 Trade Dashboard")
 
-st.set_page_config(page_title="GM TradeBot", layout="wide")
-st.title("🚀 GM TradeBot")
+# ---- Sidebar: Radio Buttons for Page Selection ----
+page = st.sidebar.radio("Select Page", ["Holdings", "Order Book", "Trades"])
 
-# session defaults
-if "api_session_key" not in st.session_state:
-    st.session_state["api_session_key"] = None
-if "susertoken" not in st.session_state:
-    st.session_state["susertoken"] = None
-if "uid" not in st.session_state:
-    st.session_state["uid"] = None
-if "client" not in st.session_state:
-    st.session_state["client"] = None
-
-pages = {
-    "Login": "pages.login",
-    "Holdings": "pages.holdings",
-    "Positions": "pages.positions",
-    "Orderbook & Tradebook": "pages.orderbook_tradebook",
-    "Place Orders": "pages.place_orders",
-    "Place GTT Orders": "pages.place_gtt_orders",
-    "GTT Orderbook": "pages.gtt_orderbook",
-    "Cancel/Modify Orders": "pages.cancel_modify_orders",
-}
-
-choice = st.sidebar.selectbox("Pages", list(pages.keys()))
-
-# dynamic import and run
-module = __import__(pages[choice], fromlist=["*"])
-# each page module exposes `show()` function
-module.show()
+# ---- Show selected page ----
+if page == "Holdings":
+    show_holdings()
+elif page == "Order Book":
+    show_orderbook()
+elif page == "Trades":
+    show_trades()
