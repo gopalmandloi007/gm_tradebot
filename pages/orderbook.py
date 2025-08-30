@@ -13,7 +13,7 @@ def show():
     st.write("🔎 Debug: Current session_state keys:", list(st.session_state.keys()))
 
     try:
-        resp = client.get_order_book()
+        resp = client.get_orders()
         st.write("🔎 Debug: Raw order book API response:", resp)
 
         if resp.get("status") != "SUCCESS":
