@@ -7,7 +7,7 @@ st.title("GM Tradebot — Demo (Backend-heavy)")
 menu = st.sidebar.radio("Go to", ["Login", "Portfolio", "Orders"])
 
 if menu == "Login":
-    from frontend.pages.login import show_login
+    from pages.login import show_login
     show_login()
 elif menu == "Portfolio":
     from backend.session import SessionManager
