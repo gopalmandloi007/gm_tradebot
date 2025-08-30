@@ -1,55 +1,50 @@
+# holdings.py
 import streamlit as st
 import pandas as pd
-from definedge_api import DefinedgeClient, DefinedgeAPIError
+from definedge_api import DefinedgeClient
 
-def show():
-    st.header("📊 Holdings Page (Debug Mode)")
+st.title("📊 Holdings (NSE Only)")
 
-    # Debug: session state check
-    st.write("🔎 Debug: Current session_state keys:", list(st.session_state.keys()))
+client = st.session_state.get("client")
+if not client or not client.api_session_key:
+    st.error("⚠️ Please login first.")
+    st.stop()
 
-    if "client" not in st.session_state or st.session_state["client"] is None:
-        st.warning("⚠️ Please login first to view holdings.")
-        return
+try:
+    resp = client.get_holdings()
 
-    client: DefinedgeClient = st.session_state["client"]
+    if resp.get("status") != "SUCCESS":
+        st.error("⚠️ Holdings API failed")
+        st.stop()
 
-    try:
-        st.write("🔎 Debug: Calling get_holdings() API...")
-        with st.spinner("Fetching holdings from Definedge API..."):
-            data = client.get_holdings()
+    raw_data = resp.get("data", [])
 
-        # Debug: raw response
-        st.write("🔎 Debug: Raw holdings API response:", data)
+    # Flatten only NSE
+    records = []
+    for h in raw_data:
+        common = {k: v for k, v in h.items() if k != "tradingsymbol"}
+        for ts in h.get("tradingsymbol", []):
+            if ts.get("exchange") == "NSE":   # ✅ Only NSE
+                row = {**common, **ts}
+                records.append(row)
 
-        if not data:
-            st.info("ℹ️ API returned empty data (no holdings).")
-            return
+    if records:
+        df = pd.DataFrame(records)
 
-        # कभी API dict देता है "data" के अंदर
-        if isinstance(data, dict) and "data" in data:
-            data = data["data"]
-            st.write("🔎 Debug: Extracted data field:", data)
+        # Optional: rename & select clean columns
+        df = df.rename(columns={
+            "dp_qty": "Quantity",
+            "avg_buy_price": "Avg Buy Price",
+            "tradingsymbol": "Symbol",
+            "exchange": "Exchange"
+        })
 
-        # DataFrame में convert
-        df = pd.DataFrame(data)
-        st.write("🔎 Debug: DataFrame created with shape:", df.shape)
+        df = df[["Symbol", "Exchange", "Quantity", "Avg Buy Price", "isin"]]
 
-        if df.empty:
-            st.info("ℹ️ No holdings found in account.")
-            return
-
-        # सिर्फ main fields चुनो
-        cols = ["tradingSymbol","exchange","product","quantity","averagePrice","lastPrice","pnl"]
-        available_cols = [c for c in cols if c in df.columns]
-        st.write("🔎 Debug: Available columns for display:", available_cols)
-
-        df = df[available_cols]
-
-        # Final table show
+        st.success(f"✅ Total NSE Holdings: {len(df)}")
         st.dataframe(df, use_container_width=True)
+    else:
+        st.warning("⚠️ No NSE holdings found")
 
-    except DefinedgeAPIError as e:
-        st.error(f"❌ Definedge API error: {e}")
-    except Exception as e:
-        st.error(f"❌ Unexpected error: {e}")
+except Exception as e:
+    st.error(f"Holdings fetch failed: {e}")
