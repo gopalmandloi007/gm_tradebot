@@ -1,6 +1,7 @@
 # orderbook.py
 import streamlit as st
 import pandas as pd
+import requests
 
 def show():
     st.title("📈 Order Book Page (All Fields)")
@@ -10,29 +11,31 @@ def show():
         st.error("⚠️ Not logged in")
         st.stop()
 
-    st.write("🔎 Debug: Current session_state keys:", list(st.session_state.keys()))
-
     try:
-        resp = client.get_orders()
-        st.write("🔎 Debug: Raw order book API response:", resp)
+        # ---- Use actual API session key ----
+        api_key = client.api_session_key  # replace with actual attribute
+        url = "https://api.definedge.com/orders"  # Replace with actual base URL + endpoint
+        headers = {
+            "Authorization": api_key
+        }
 
-        if resp.get("status") != "SUCCESS":
+        resp = requests.get(url, headers=headers)
+        data = resp.json()
+        st.write("🔎 Debug: Raw API response:", data)
+
+        if data.get("status") != "SUCCESS":
             st.error("⚠️ Order Book API failed")
             st.stop()
 
-        raw_data = resp.get("data", [])
-        st.write("🔎 Debug: Extracted data field:", raw_data)
-
-        # ---- Flatten all fields (Only NSE) ----
+        raw_data = data.get("data", [])
         records = []
+
         for o in raw_data:
             base = {k: v for k, v in o.items() if k != "tradingsymbol"}
             for ts in o.get("tradingsymbol", []):
-                if ts.get("exchange") == "NSE":   # ✅ Only NSE
+                if ts.get("exchange") == "NSE":  # Only NSE
                     row = {**base, **ts}
                     records.append(row)
-
-        st.write("🔎 Debug: Flattened records:", records)
 
         if records:
             df = pd.DataFrame(records)
