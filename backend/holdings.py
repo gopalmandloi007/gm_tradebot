@@ -3,7 +3,7 @@ import logging
 from typing import Any, Dict, List, Tuple
 import pandas as pd
 from .api_client import APIClient
-from .market_data import MarketDataService
+from backend.market_data import MarketDataService
 from .historical import HistoricalService
 
 log = logging.getLogger("backend.holdings")
