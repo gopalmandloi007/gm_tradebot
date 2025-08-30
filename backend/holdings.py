@@ -2,9 +2,9 @@
 import logging
 from typing import Any, Dict, List, Tuple
 import pandas as pd
-from .api_client import APIClient
+from backend.api_client import APIClient
 from backend.market_data import MarketDataService
-from .historical import HistoricalService
+from backend.historical import HistoricalService
 
 log = logging.getLogger("backend.holdings")
 log.setLevel(logging.INFO)
