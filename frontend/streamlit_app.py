@@ -6,9 +6,9 @@ import streamlit as st
 # 🔑 Ensure repo root is in sys.path (important for Streamlit Cloud)
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from backend.session import SessionManager
-from backend.holdings import HoldingsService
-from backend.orders import OrdersService
+from gm_tradebot.backend.session import SessionManager
+from gm_teadebot.backend.holdings import HoldingsService
+from gm_tradebot.backend.orders import OrdersService
 
 
 # ----------------------------------------------------
