@@ -1,8 +1,8 @@
 # app.py
 import streamlit as st
 from pages.holdings import show as show_holdings
-from orderbook import show_orderbook
-from trades import show_trades
+from pages.orderbook import show_orderbook
+from pages.trades import show_trades
 
 # ---- App Config ----
 st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
