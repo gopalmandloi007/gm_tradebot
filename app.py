@@ -1,21 +1,39 @@
+# app.py
 import streamlit as st
+import os, sys
 
-st.set_page_config(
-    page_title="GM TradeBot",
-    page_icon="🤖",
-    layout="wide"
-)
+# ensure repo root is on sys.path when running from Streamlit Cloud
+repo_root = os.path.abspath(os.path.dirname(__file__))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
-# Agar session set nahi hai to default false rakho
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-if "session_key" not in st.session_state:
-    st.session_state["session_key"] = None
+st.set_page_config(page_title="GM TradeBot", layout="wide")
+st.title("🚀 GM TradeBot")
 
-st.title("🚀 GM TradeBot Dashboard")
-st.sidebar.success("Select a page")
+# session defaults
+if "api_session_key" not in st.session_state:
+    st.session_state["api_session_key"] = None
+if "susertoken" not in st.session_state:
+    st.session_state["susertoken"] = None
+if "uid" not in st.session_state:
+    st.session_state["uid"] = None
+if "client" not in st.session_state:
+    st.session_state["client"] = None
 
-if not st.session_state["logged_in"]:
-    st.warning("🔑 Please login first from the Login Page.")
-else:
-    st.success(f"✅ You are logged in with session: {st.session_state['session_key']}")
+pages = {
+    "Login": "pages.login",
+    "Holdings": "pages.holdings",
+    "Positions": "pages.positions",
+    "Orderbook & Tradebook": "pages.orderbook_tradebook",
+    "Place Orders": "pages.place_orders",
+    "Place GTT Orders": "pages.place_gtt_orders",
+    "GTT Orderbook": "pages.gtt_orderbook",
+    "Cancel/Modify Orders": "pages.cancel_modify_orders",
+}
+
+choice = st.sidebar.selectbox("Pages", list(pages.keys()))
+
+# dynamic import and run
+module = __import__(pages[choice], fromlist=["*"])
+# each page module exposes `show()` function
+module.show()
