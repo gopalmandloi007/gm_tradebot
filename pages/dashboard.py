@@ -35,7 +35,8 @@ def show_dashboard():
             dp_qty = float(item.get("dp_qty", 0))
             t1_qty = float(item.get("t1_qty", 0))
             holding_used = float(item.get("holding_used", 0))
-            total_qty = dp_qty + t1_qty + holding_used
+            # Ensure numeric addition
+            total_qty = float(dp_qty) + float(t1_qty) + float(holding_used)
             for sym in tradingsymbols:
                 if sym.get("exchange") != "NSE":
                     continue
@@ -56,9 +57,7 @@ def show_dashboard():
         ltp_list = []
         prev_close_list = []
         today = datetime.today()
-        prev_date = today - timedelta(days=1)
 
-        # Loop through each symbol
         for idx, row in df.iterrows():
             token = row["token"]
             # Get quotes for LTP
@@ -67,7 +66,6 @@ def show_dashboard():
             ltp_list.append(ltp)
 
             # Get previous close from historical (skip weekends/holidays)
-            # Fetch last 10 days to safely get last trading day
             from_date = (today - timedelta(days=10)).strftime("%d%m%Y%H%M")
             to_date = today.strftime("%d%m%Y%H%M")
             hist_csv = client.historical_csv(segment="NSE", token=token, timeframe="day", frm=from_date, to=to_date)
@@ -81,7 +79,6 @@ def show_dashboard():
             else:
                 st.warning(f"Unexpected columns in historical for {row['symbol']}: {hist_df.shape[1]}")
 
-            # Previous close is the last row before today
             hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
             hist_df = hist_df.sort_values("DateTime")
             prev_close = hist_df.iloc[-2]["Close"] if len(hist_df) >= 2 else hist_df.iloc[-1]["Close"]
@@ -116,13 +113,20 @@ def show_dashboard():
                          "invested_value", "current_value", "today_pnl", "overall_pnl",
                          "capital_allocation_%"]], use_container_width=True)
 
-        # --- Step 8: Pie chart for capital allocation ---
+        # --- Step 8: Pie chart for capital allocation including Cash in Hand ---
         st.subheader("📊 Capital Allocation (%)")
-        fig = px.pie(df, names="symbol", values="capital_allocation_%", title="Capital Allocation % per Stock")
+        total_stock_pct = df["capital_allocation_%"].sum()
+        cash_pct = 100 - total_stock_pct
+
+        pie_df = df[["symbol", "capital_allocation_%"]].copy()
+        pie_df = pie_df.rename(columns={"symbol": "Name", "capital_allocation_%": "Value"})
+        pie_df = pd.concat([pie_df, pd.DataFrame([{"Name": "Cash in Hand", "Value": cash_pct}])], ignore_index=True)
+
+        fig = px.pie(pie_df, names="Name", values="Value", title="Capital Allocation % including Cash in Hand")
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- Step 9: Chart for selected stock ---
-        st.subheader("📈 Stock Charts")
+        # --- Step 9: Candlestick Chart for selected stock ---
+        st.subheader("📈 Candlestick Chart")
         selected_symbol = st.selectbox("Select Symbol for Chart", df["symbol"].tolist())
         token = df[df["symbol"] == selected_symbol]["token"].values[0]
 
@@ -140,9 +144,21 @@ def show_dashboard():
         hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
         hist_df = hist_df.sort_values("DateTime")
 
-        fig2 = px.line(hist_df, x="DateTime", y="Close", title=f"{selected_symbol} Price Chart")
+        # Candlestick chart
+        import plotly.graph_objects as go
+        fig2 = go.Figure(data=[go.Candlestick(
+            x=hist_df["DateTime"],
+            open=hist_df["Open"],
+            high=hist_df["High"],
+            low=hist_df["Low"],
+            close=hist_df["Close"],
+            increasing_line_color='green',
+            decreasing_line_color='red'
+        )])
+        fig2.update_layout(title=f"{selected_symbol} Candlestick Chart", xaxis_title="Date", yaxis_title="Price")
         st.plotly_chart(fig2, use_container_width=True)
 
     except Exception as e:
         st.error(f"⚠️ Dashboard fetch failed: {e}")
         st.text(e)
+        
