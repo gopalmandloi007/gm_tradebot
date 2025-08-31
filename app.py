@@ -3,7 +3,8 @@ import streamlit as st
 from pages.holdings import show as show_holdings
 from pages.orderbook import show as show_orderbook
 from pages.trades import show as show_trades
-from pages.login import show as show_login  # optional login page
+from pages.login import show as show_login
+from pages.place_order import show as show_place_order  # NEW
 
 st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
 st.title("📊 Trade Dashboard")
@@ -11,12 +12,12 @@ st.title("📊 Trade Dashboard")
 # ---- Sidebar: Radio Buttons for Page Selection ----
 page = st.sidebar.radio(
     "Select Page",
-    ["Login", "Holdings", "Positions", "Order Book", "Trades"]
+    ["Login", "Holdings", "Positions", "Order Book", "Trades", "Place Order"]
 )
 
 # ---- Show selected page ----
 if page == "Login":
-    show_login()  # your login.py page
+    show_login()
 else:
     # Check client is logged in
     if "client" not in st.session_state:
@@ -30,3 +31,6 @@ else:
         show_orderbook()
     elif page == "Trades":
         show_trades()
+    elif page == "Place Order":
+        show_place_order()
+        
