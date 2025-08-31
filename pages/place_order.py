@@ -5,6 +5,7 @@ import io
 import zipfile
 import requests
 import time
+import os
 
 MASTER_URL = "https://app.definedgesecurities.com/public/allmaster.zip"
 MASTER_FILE = "data/master/allmaster.csv"
@@ -21,8 +22,6 @@ def download_and_extract_master():
                 df = pd.read_csv(f, header=None)
         df.columns = ["SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT","EXPIRY",
                       "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER","ISIN","PRICEMULT","COMPANY"]
-        # Save locally
-        import os
         os.makedirs("data/master", exist_ok=True)
         df.to_csv(MASTER_FILE, index=False)
         return df
@@ -72,47 +71,47 @@ def show_place_order():
     token_row = df_exch[df_exch["TRADINGSYM"] == selected_symbol]
     token = int(token_row["TOKEN"].values[0]) if not token_row.empty else None
 
-    # ---- Initial LTP fetch (set price once) ----
+    # ---- Initial LTP fetch ----
     initial_ltp = fetch_ltp(client, exchange, token) if token else 0.0
     price_input = st.number_input("Price", min_value=0.0, step=0.05, value=initial_ltp)
 
-    # ---- LTP display container (auto-refresh) ----
+    # ---- LTP display ----
     ltp_container = st.empty()
-    cash_container = st.empty()
-    margin_container = st.empty()
+    ltp_container.metric("📈 LTP", f"{initial_ltp:.2f}")
 
     # ---- Fetch user limits ----
     limits = client.api_get("/limits")
     cash_available = float(limits.get("cash", 0.0))
-    cash_container.info(f"💰 Cash Available: ₹{cash_available:,.2f}")
+    st.info(f"💰 Cash Available: ₹{cash_available:,.2f}")
 
     # ---- Order form ----
     with st.form("place_order_form"):
         st.subheader("Order Details")
         order_type = st.radio("Order Type", ["BUY", "SELL"])
-        price_type = st.radio("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"])
+        
+        # ✅ Default Limit Order
+        price_type = st.radio("Price Type", ["LIMIT", "MARKET", "SL-LIMIT", "SL-MARKET"], index=0)
         product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=2)
-        place_by = st.radio("Place by", ["Quantity", "Amount"])
-        quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
-        amount = st.number_input("Amount", min_value=0.0, step=0.05, value=0.0)
+
+        # ✅ Place by selection
+        place_by = st.radio("Place by", ["Quantity", "Amount"], index=0)
+
+        if place_by == "Quantity":
+            quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
+            amount = quantity * price_input
+            st.info(f"💵 Estimated Amount: ₹{amount:,.2f}")
+        else:
+            amount = st.number_input("Amount", min_value=0.0, step=0.05, value=0.0)
+            quantity = int(amount // price_input) if price_input > 0 else 0
+            st.info(f"🔢 Estimated Quantity: {quantity}")
+
         trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
         validity = st.selectbox("Validity", ["DAY", "IOC", "EOS"], index=0)
         remarks = st.text_input("Remarks (optional)", "")
         submitted = st.form_submit_button("🚀 Place Order")
 
-    # ---- Auto-refresh LTP ----
-    if token:
-        for i in range(1):  # only one refresh on page load, further can use while loop in async or callback
-            current_ltp = fetch_ltp(client, exchange, token)
-            ltp_container.metric("📈 LTP", f"{current_ltp:.2f}")
-            time.sleep(1)  # adjust interval if needed
-
     # ---- Place order ----
     if submitted:
-        # Determine quantity if placed by amount
-        if place_by == "Amount" and amount > 0 and initial_ltp > 0:
-            quantity = int(amount // initial_ltp)
-
         payload = {
             "exchange": exchange,
             "tradingsymbol": selected_symbol,
@@ -139,4 +138,3 @@ def show_place_order():
             st.success(f"✅ Order placed successfully. Order ID: {resp.get('order_id')}")
         else:
             st.error(f"❌ Order placement failed. Response: {resp}")
-            
