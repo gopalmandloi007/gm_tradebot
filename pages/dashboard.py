@@ -1,11 +1,8 @@
 # pages/dashboard.py
 import streamlit as st
 import pandas as pd
-import datetime
-import io
-import plotly.graph_objects as go
-
-DEFAULT_TOTAL_CAPITAL = 1_400_000  # Default capital for % allocation
+import plotly.express as px
+from datetime import datetime, timedelta
 
 def show_dashboard():
     st.header("📊 Trading Dashboard — Definedge")
@@ -16,15 +13,16 @@ def show_dashboard():
         return
 
     try:
-        # --- Fetch Holdings ---
-        resp = client.get_holdings()
-        if not resp or resp.get("status") != "SUCCESS":
-            st.warning("⚠️ No holdings found or API error.")
+        # Fetch Holdings
+        holdings_resp = client.get_holdings()
+        if not holdings_resp or holdings_resp.get("status") != "SUCCESS":
+            st.error(f"⚠️ Holdings fetch failed: {holdings_resp.get('message')}")
             return
 
-        holdings_data = resp.get("data", [])
+        holdings_data = holdings_resp.get("data", [])
         nse_holdings = []
 
+        # Filter NSE holdings and flatten tradingsymbols
         for item in holdings_data:
             for ts in item.get("tradingsymbol", []):
                 if ts.get("exchange") == "NSE":
@@ -32,7 +30,7 @@ def show_dashboard():
                         "tradingsymbol": ts.get("tradingsymbol"),
                         "token": ts.get("token"),
                         "avg_buy_price": float(item.get("avg_buy_price", 0)),
-                        "total_qty": int(item.get("t1_qty", 0)) + int(item.get("dp_qty", 0)),
+                        "total_qty": int(item.get("t1_qty", 0) or 0),
                         "remarks": ""
                     })
 
@@ -40,86 +38,87 @@ def show_dashboard():
             st.info("✅ No NSE holdings found.")
             return
 
-        # --- Fetch LTP and previous close ---
-        for h in nse_holdings:
-            quote = client.get_quotes(exchange="NSE", token=h["token"])
-            if quote.get("status") == "SUCCESS":
-                h["ltp"] = float(quote.get("ltp", 0))
-                h["previous_close"] = float(quote.get("day_open", 0))  # Using day_open as previous close approximation
-            else:
-                h["ltp"] = 0
-                h["previous_close"] = 0
-
-            h["invested_value"] = h["avg_buy_price"] * h["total_qty"]
-            h["current_value"] = h["ltp"] * h["total_qty"]
-            h["today_pnl"] = (h["ltp"] - h["previous_close"]) * h["total_qty"]
-            h["overall_pnl"] = h["current_value"] - h["invested_value"]
-            h["capital_pct"] = (h["invested_value"] / DEFAULT_TOTAL_CAPITAL) * 100
-
         df = pd.DataFrame(nse_holdings)
 
-        # --- Overall Summary ---
-        overall_invested = df["invested_value"].sum()
-        overall_current = df["current_value"].sum()
-        overall_today_pnl = df["today_pnl"].sum()
-        overall_pnl = df["overall_pnl"].sum()
+        # Fetch LTP and previous close
+        ltp_list = []
+        prev_close_list = []
+        for idx, row in df.iterrows():
+            try:
+                quote_resp = client.get_quotes(exchange="NSE", token=row["token"])
+                ltp = float(quote_resp.get("ltp", 0))
+                ltp_list.append(ltp)
 
+                # Historical previous day close (handle weekends/holidays)
+                to_date = datetime.today()
+                from_date = to_date - timedelta(days=7)  # last 7 days
+                frm = from_date.strftime("%d%m%Y0000")
+                to = to_date.strftime("%d%m%Y2359")
+                hist_csv = client.historical_csv(segment="NSE", token=row["token"], timeframe="day", frm=frm, to=to)
+                hist_df = pd.read_csv(pd.compat.StringIO(hist_csv), header=None)
+                hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume"]
+                hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"], errors='coerce')
+                hist_df = hist_df.sort_values("DateTime")
+                prev_close = hist_df["Close"].iloc[-2] if len(hist_df) > 1 else hist_df["Close"].iloc[-1]
+                prev_close_list.append(prev_close)
+            except Exception:
+                ltp_list.append(0)
+                prev_close_list.append(0)
+
+        df["ltp"] = ltp_list
+        df["previous_close"] = prev_close_list
+        df["invested_value"] = df["avg_buy_price"] * df["total_qty"]
+        df["current_value"] = df["ltp"] * df["total_qty"]
+        df["today_pnl"] = (df["ltp"] - df["previous_close"]) * df["total_qty"]
+        df["overall_pnl"] = (df["ltp"] - df["avg_buy_price"]) * df["total_qty"]
+
+        TOTAL_CAPITAL = 1400000
+        df["capital_pct"] = df["invested_value"] / TOTAL_CAPITAL * 100
+
+        # Overall Summary
         st.subheader("💰 Overall Summary")
-        st.metric("Total Invested Value", f"₹{overall_invested:,.2f}")
-        st.metric("Total Current Value", f"₹{overall_current:,.2f}")
-        st.metric("Today P&L", f"₹{overall_today_pnl:,.2f}")
-        st.metric("Overall P&L", f"₹{overall_pnl:,.2f}")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Invested Value", f"₹{df['invested_value'].sum():,.2f}")
+        col2.metric("Total Current Value", f"₹{df['current_value'].sum():,.2f}")
+        col3.metric("Today P&L", f"₹{df['today_pnl'].sum():,.2f}")
+        col4.metric("Overall P&L", f"₹{df['overall_pnl'].sum():,.2f}")
 
-        # --- Editable Table for Holdings ---
+        # Holdings Table
         st.subheader("📝 Holdings Details")
-        edited_df = st.data_editor(
-            df[["tradingsymbol", "total_qty", "avg_buy_price", "ltp",
-                "previous_close", "invested_value", "current_value",
-                "today_pnl", "overall_pnl", "capital_pct", "remarks"]],
-            num_rows="dynamic",
-            use_container_width=True
-        )
+        st.dataframe(df[["tradingsymbol", "total_qty", "avg_buy_price", "ltp", "previous_close",
+                         "invested_value", "current_value", "today_pnl", "overall_pnl",
+                         "capital_pct", "remarks"]], use_container_width=True)
 
-        # --- Pie Chart for Capital Allocation ---
+        # Capital Allocation Pie Chart
         st.subheader("📊 Capital Allocation")
-        fig_pie = go.Figure(go.Pie(
-            labels=edited_df["tradingsymbol"],
-            values=edited_df["capital_pct"],
-            hoverinfo="label+percent+value",
-            textinfo="label+percent"
-        ))
+        fig_pie = px.pie(df, values="capital_pct", names="tradingsymbol",
+                         title=f"Capital Allocation (% of ₹{TOTAL_CAPITAL:,})")
         st.plotly_chart(fig_pie, use_container_width=True)
 
-        # --- Candlestick Chart ---
+        # Candlestick Chart
         st.subheader("📈 Candlestick Chart")
-        symbol_selected = st.selectbox("Select Symbol for Chart", edited_df["tradingsymbol"])
-        token_selected = edited_df.loc[edited_df["tradingsymbol"]==symbol_selected, "token"].values[0]
-
-        # Historical Data
-        to_date = datetime.datetime.now()
-        from_date = to_date - datetime.timedelta(days=60)  # Last 60 days
-        frm = from_date.strftime("%d%m%Y") + "0000"
-        to = to_date.strftime("%d%m%Y") + "2359"
-
-        hist_csv = client.historical_csv(segment="NSE", token=token_selected, timeframe="day", frm=frm, to=to)
-        hist_df = pd.read_csv(io.StringIO(hist_csv), header=None)
-        if hist_df.shape[1] == 7:  # Expected columns: Dateandtime, Open, High, Low, Close, Volume, OI
-            hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume", "OI"]
-            hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
-            fig_candle = go.Figure(data=[go.Candlestick(
-                x=hist_df["DateTime"],
-                open=hist_df["Open"],
-                high=hist_df["High"],
-                low=hist_df["Low"],
-                close=hist_df["Close"],
-                name=symbol_selected
-            )])
-            fig_candle.update_layout(xaxis_rangeslider_visible=True)
-            st.plotly_chart(fig_candle, use_container_width=True)
+        symbol_selected = st.selectbox("Select Symbol for Chart", df["tradingsymbol"])
+        token_row = df[df["tradingsymbol"] == symbol_selected]
+        if not token_row.empty:
+            token_selected = token_row["token"].values[0]
+            try:
+                to_date = datetime.today()
+                from_date = to_date - timedelta(days=30)
+                frm = from_date.strftime("%d%m%Y0000")
+                to = to_date.strftime("%d%m%Y2359")
+                hist_csv = client.historical_csv(segment="NSE", token=token_selected, timeframe="day", frm=frm, to=to)
+                hist_df = pd.read_csv(pd.compat.StringIO(hist_csv), header=None)
+                hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume"]
+                hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"], errors='coerce')
+                hist_df = hist_df.sort_values("DateTime")
+                fig_candle = px.candlestick(hist_df, x="DateTime", open="Open", high="High", low="Low", close="Close",
+                                            title=f"{symbol_selected} Candlestick Chart")
+                st.plotly_chart(fig_candle, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Chart fetch failed: {e}")
         else:
-            st.warning("⚠️ Historical data format unexpected, cannot plot candlestick chart.")
+            st.warning(f"No token found for {symbol_selected}")
 
     except Exception as e:
         st.error(f"⚠️ Dashboard fetch failed: {e}")
-        st.stop()
         
