@@ -13,24 +13,27 @@ def show():
 
     if st.button("Fetch Orderbook"):
         try:
-            orders = client.get_orders()   # this is the orderbook
-            if isinstance(orders, dict) and "data" in orders:
-                df = pd.DataFrame(orders["data"])
-                if not df.empty:
-                    st.success("✅ Orderbook fetched successfully")
-                    st.dataframe(df)
-                else:
-                    st.info("No active orders in the orderbook.")
-            elif isinstance(orders, list):
-                df = pd.DataFrame(orders)
-                if not df.empty:
-                    st.success("✅ Orderbook fetched successfully")
-                    st.dataframe(df)
-                else:
-                    st.info("No active orders in the orderbook.")
-            else:
-                st.warning("Unexpected response format")
-                st.json(orders)
+            resp = client.get_orders()   # calls /orders
+            if not resp:
+                st.warning("⚠️ API returned empty response")
+                return
+
+            status = resp.get("status")
+            orders = resp.get("orders", [])
+
+            if status != "SUCCESS":
+                st.error(f"❌ API returned error. Response: {resp}")
+                return
+
+            if not orders:
+                st.info("No orders found in orderbook today.")
+                return
+
+            # Convert to dataframe
+            df = pd.DataFrame(orders)
+            st.success(f"✅ Orderbook fetched ({len(df)} orders)")
+            st.dataframe(df)
+
         except Exception as e:
             st.error(f"Fetching orderbook failed: {e}")
             st.text(traceback.format_exc())
