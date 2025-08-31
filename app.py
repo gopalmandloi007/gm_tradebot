@@ -15,16 +15,15 @@ st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
 st.title("📊 Trade Dashboard")
 
 # ---- Sidebar: Master File Update Button ----
-import scripts.update_master as um  # Make sure this path is correct
+import scripts.update_master as um
 
 if st.sidebar.button("🔄 Update Master File"):
-    client = st.session_state.get("client")  # pass client if logged in
-    try:
-        st.info("Downloading and updating master file...")
-        um.download_and_extract(client)
-        st.success("✅ Master file updated successfully!")
-    except Exception as e:
-        st.error(f"Failed to update master file: {e}")
+    st.info("Downloading and updating master file...")
+    success, msg = um.download_and_extract()
+    if success:
+        st.success(msg)
+    else:
+        st.error(msg)
 
 # ---- Sidebar: Radio Buttons for Page Selection ----
 page = st.sidebar.radio(
