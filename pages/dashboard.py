@@ -4,9 +4,10 @@ import pandas as pd
 import datetime
 from datetime import timedelta
 import traceback
+from io import StringIO  # for reading CSV from historical_csv
 
 def show_dashboard():
-    st.header("📊 Trading Dashboard — Definedge")
+    st.header("📊 Trading Dashboard — Definedge (NSE Only)")
 
     client = st.session_state.get("client")
     if not client:
@@ -27,13 +28,15 @@ def show_dashboard():
             st.info("✅ No holdings found.")
             return
 
-        # 2️⃣ Flatten holdings into tradingsymbol level
+        # 2️⃣ Flatten holdings into tradingsymbol level (NSE only)
         flat_rows = []
         for h in holdings_data:
             qty_total = int(h.get("t1_qty", 0)) + int(h.get("dp_qty", 0))
             if qty_total == 0:
                 continue
             for ts in h.get("tradingsymbol", []):
+                if ts.get("exchange") != "NSE":
+                    continue
                 flat_rows.append({
                     "Symbol": ts.get("tradingsymbol"),
                     "Exchange": ts.get("exchange"),
@@ -45,7 +48,7 @@ def show_dashboard():
                 })
 
         if not flat_rows:
-            st.info("✅ No holdings with non-zero quantity found.")
+            st.info("✅ No NSE holdings with non-zero quantity found.")
             return
 
         df = pd.DataFrame(flat_rows)
@@ -66,24 +69,22 @@ def show_dashboard():
             except:
                 ltp_list.append(None)
 
-            # --- Fetch Previous Close ---
+            # --- Fetch Previous Close from historical_csv ---
             try:
-                # Calculate 'from' and 'to' date for historical API
                 today = datetime.datetime.now()
-                from_dt = (today - timedelta(days=7)).strftime("%d%m%Y0000")
-                to_dt = today.strftime("%d%m%Y2359")
+                frm = (today - timedelta(days=7)).strftime("%d%m%Y0000")
+                to = today.strftime("%d%m%Y2359")
 
-                hist_resp = client.get_historical(
+                hist_csv = client.historical_csv(
                     segment=exchange,
                     token=token,
                     timeframe="day",
-                    from_date=from_dt,
-                    to_date=to_dt
+                    frm=frm,
+                    to=to
                 )
-                # historical API returns CSV text without headers
-                hist_df = pd.read_csv(pd.compat.StringIO(hist_resp),
+                hist_df = pd.read_csv(StringIO(hist_csv),
                                       names=["DateTime","Open","High","Low","Close","Volume","OI"])
-                # Take last non-zero Close
+                # Use last available close before today as previous close
                 prev_close = hist_df["Close"].iloc[-2] if len(hist_df)>=2 else hist_df["Close"].iloc[-1]
                 prev_close_list.append(prev_close)
             except:
@@ -99,7 +100,6 @@ def show_dashboard():
         # 5️⃣ Show Dashboard Table
         st.subheader("📋 Holdings Overview")
         st.dataframe(df, use_container_width=True)
-
         st.markdown(f"**Overall PnL:** ₹{df['Overall_PnL'].sum():,.2f}")
 
         # 6️⃣ Editable Remarks Table
@@ -117,16 +117,16 @@ def show_dashboard():
                 token = sel_row["Token"]
                 exchange = sel_row["Exchange"]
                 today = datetime.datetime.now()
-                from_dt = (today - timedelta(days=60)).strftime("%d%m%Y0000")
-                to_dt = today.strftime("%d%m%Y2359")
-                hist_resp = client.get_historical(
+                frm = (today - timedelta(days=60)).strftime("%d%m%Y0000")
+                to = today.strftime("%d%m%Y2359")
+                hist_csv = client.historical_csv(
                     segment=exchange,
                     token=token,
                     timeframe="day",
-                    from_date=from_dt,
-                    to_date=to_dt
+                    frm=frm,
+                    to=to
                 )
-                hist_df = pd.read_csv(pd.compat.StringIO(hist_resp),
+                hist_df = pd.read_csv(StringIO(hist_csv),
                                       names=["DateTime","Open","High","Low","Close","Volume","OI"])
                 hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
                 st.line_chart(hist_df.set_index("DateTime")[["Close","High","Low"]])
