@@ -1,97 +1,58 @@
 # pages/place_order.py
 import streamlit as st
 import pandas as pd
-import os
-import requests
-import io
-import traceback
 from definedge_api import DefinedgeClient
 
-# --- Path to store master file locally ---
-MASTER_FILE_PATH = "data/master/allmaster.csv"
-MASTER_FOLDER = "data/master/"
+MASTER_FILE = "data/master/allmaster.csv"  # path where master CSV is stored
 
-# --- Function to download master file ---
-def download_master_file():
-    os.makedirs(MASTER_FOLDER, exist_ok=True)
-    url = "https://app.definedgesecurities.com/public/allmaster.zip"
-    r = requests.get(url)
-    r.raise_for_status()
-    import zipfile, tempfile
-    with tempfile.NamedTemporaryFile(delete=False) as tmpfile:
-        tmpfile.write(r.content)
-        tmpfile.flush()
-        with zipfile.ZipFile(tmpfile.name, 'r') as zip_ref:
-            zip_ref.extractall(MASTER_FOLDER)
-    # The extracted file is usually named allmaster.csv
-    return os.path.join(MASTER_FOLDER, "allmaster.csv")
-
-# --- Load master symbols ---
-@st.cache_data
 def load_master_symbols():
-    if not os.path.exists(MASTER_FILE_PATH):
-        MASTER_FILE = download_master_file()
-    else:
-        MASTER_FILE = MASTER_FILE_PATH
-    df = pd.read_csv(MASTER_FILE, header=None)
-    # Definedge master columns
-    df.columns = ["segment", "token", "symbol", "tradingsym", "instrument_type",
-                  "expiry", "ticksize", "lotsize", "optiontype", "strike",
-                  "priceprec", "multiplier", "isin", "pricemult", "company"]
-    # Keep only NSE/BSE cash or FNO if needed
-    df = df[df["segment"].isin(["NSE", "BSE", "NFO"])]
+    df = pd.read_csv(MASTER_FILE)
+    if 'TRADINGSYM' not in df.columns:
+        st.error("Master file missing TRADINGSYM column")
+        return pd.DataFrame()
     return df
 
-# --- Streamlit page ---
-def show():
+def show_place_order():
     st.header("🛒 Place Order — Definedge")
 
-    client = st.session_state.get("client")
+    client: DefinedgeClient = st.session_state.get("client")
     if not client:
-        st.error("⚠️ Not logged in. Please login first from the Login page.")
+        st.error("⚠️ Not logged in. Please login first from Login page.")
         return
 
-    # Load master file
+    # --- Load master symbols ---
+    df_symbols = load_master_symbols()
+    if df_symbols.empty:
+        st.warning("⚠️ Master symbols not loaded or empty.")
+        return
+
+    # --- Exchange selection (default NSE) ---
+    exchange = st.radio("Select Exchange", ["NSE", "BSE", "NFO", "MCX"], index=0)
+
+    # --- Symbol selection filtered by selected exchange ---
+    df_filtered = df_symbols[df_symbols['SEGMENT'] == exchange]
+    tradingsymbol_list = df_filtered['TRADINGSYM'].unique().tolist()
+    selected_symbol = st.selectbox("Select Trading Symbol", tradingsymbol_list)
+
+    # --- Fetch LTP only for selected symbol ---
+    token_row = df_filtered[df_filtered['TRADINGSYM'] == selected_symbol].iloc[0]
+    token = str(token_row['TOKEN'])
+
     try:
-        df_symbols = load_master_symbols()
-    except Exception as e:
-        st.error(f"Failed to load master symbols: {e}")
-        return
+        quote = client.get_quotes(exchange=exchange, token=token)
+        ltp = float(quote.get("ltp", 0))
+    except:
+        ltp = 0
 
+    # --- Order form ---
     with st.form("place_order_form"):
         st.subheader("Order Details")
 
-        exchange = st.selectbox("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=2)  # default NFO
-
-        # Show trading symbol + company
-        tradingsym_option = df_symbols.apply(lambda x: f"{x['tradingsym']} ({x['company']})", axis=1)
-        selected_option = st.selectbox("Trading Symbol", tradingsym_option)
-        selected_tradingsym = selected_option.split(" ")[0]
-        token = df_symbols[df_symbols["tradingsym"] == selected_tradingsym]["token"].values[0]
-
-        # Fetch LTP automatically
-        ltp = 0.0
-        try:
-            quote = client.get_quotes(exchange=exchange, token=str(token))
-            ltp = float(quote.get("ltp", 0))
-        except Exception as e:
-            st.warning(f"Failed to fetch LTP: {e}")
-
-        # Price type radio
-        price_type = st.radio("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"], index=0)
-        price = st.number_input("Price", value=ltp if ltp>0 else 0.0, step=0.05, format="%.2f")
-
-        # Quantity or Amount
-        order_mode = st.radio("Order Mode", ["Quantity", "Amount"])
-        if order_mode == "Quantity":
-            quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
-            amount = 0.0
-        else:
-            amount = st.number_input("Amount (₹)", min_value=1.0, step=0.05, value=ltp*1 if ltp>0 else 0.0)
-            quantity = int(amount/price) if price>0 else 0
-
         order_type = st.selectbox("Order Type", ["BUY", "SELL"])
         product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=2)
+        price_type = st.radio("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"])
+        quantity = st.number_input("Quantity", min_value=1, step=1, value=50)
+        price = st.number_input("Price", min_value=0.0, step=0.05, value=ltp)
         trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
         validity = st.selectbox("Validity", ["DAY", "IOC", "EOS"], index=0)
         remarks = st.text_input("Remarks (optional)", "")
@@ -102,14 +63,13 @@ def show():
         try:
             payload = {
                 "exchange": exchange,
-                "tradingsymbol": selected_tradingsym,
-                "token": str(token),
+                "tradingsymbol": selected_symbol.strip(),
                 "order_type": order_type,
-                "price": str(price),
                 "price_type": price_type,
                 "product_type": product_type,
                 "quantity": str(quantity),
-                "validity": validity,
+                "price": str(price),
+                "validity": validity
             }
             if trigger_price > 0:
                 payload["trigger_price"] = str(trigger_price)
@@ -130,5 +90,4 @@ def show():
 
         except Exception as e:
             st.error(f"Order placement failed: {e}")
-            st.text(traceback.format_exc())
-        
+                
