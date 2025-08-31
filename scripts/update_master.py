@@ -1,49 +1,37 @@
-# script/update_master.py
-import os
+# scripts/update_master.py
+import requests
 import zipfile
+import os
 import io
-import pandas as pd
-from definedge_api import DefinedgeClient
 
-# ---- Configuration ----
-MASTER_FOLDER = "data/master/"
-MASTER_FILES = {
-    "NSE_CASH": "nsecash.zip",
-    "NSE_FNO": "nsefno.zip",
-    "BSE_CASH": "bsecash.zip",
-    "BSE_FNO": "bsefno.zip",
-    "MCX_FNO": "mcxfno.zip",
-    "ALL": "allmaster.zip"
-}
+# --- Constants ---
+BASE_FILES = "https://app.definedgesecurities.com/public"
+MASTER_ZIP_NAME = "nsecash.zip"  # Change if you want BSE/NFO/MCX etc.
+SAVE_DIR = "data/master"          # Folder where CSV will be saved
 
-# Ensure folder exists
-os.makedirs(MASTER_FOLDER, exist_ok=True)
-
-def download_and_extract(client: DefinedgeClient, file_key: str = "ALL"):
+def download_master():
+    """
+    Downloads the master zip file from Definedge and extracts it to SAVE_DIR.
+    """
     try:
-        zip_name = MASTER_FILES[file_key]
-        dest_zip_path = os.path.join(MASTER_FOLDER, zip_name)
-        
-        print(f"Downloading {zip_name} ...")
-        client.download_master_zip(zip_name, dest_zip_path)
-        print(f"✅ Downloaded: {dest_zip_path}")
+        # --- Ensure folder exists ---
+        os.makedirs(SAVE_DIR, exist_ok=True)
 
-        # Extract zip
-        with zipfile.ZipFile(dest_zip_path, "r") as zip_ref:
-            zip_ref.extractall(MASTER_FOLDER)
-        print(f"✅ Extracted master files to: {MASTER_FOLDER}")
+        # --- Download zip file ---
+        url = f"{BASE_FILES}/{MASTER_ZIP_NAME}"
+        print(f"Downloading {url} ...")
+        r = requests.get(url, stream=True, timeout=25)
+        r.raise_for_status()
 
-        # Optional: list extracted files
-        extracted_files = os.listdir(MASTER_FOLDER)
-        print("Extracted files:", extracted_files)
+        # --- Read zip in memory ---
+        z = zipfile.ZipFile(io.BytesIO(r.content))
 
+        # --- Extract all files into SAVE_DIR ---
+        z.extractall(SAVE_DIR)
+
+        print(f"✅ Master file updated successfully! Saved in {SAVE_DIR}/")
+        return True
     except Exception as e:
-        print("❌ Failed to download/update master file:", e)
-
-if __name__ == "__main__":
-    client = DefinedgeClient()
-    # Make sure session key is set if required
-    # client.set_session_key("YOUR_API_SESSION_KEY")
-    
-    download_and_extract(client)
-    
+        print(f"❌ Failed to update master file: {e}")
+        return False
+        
