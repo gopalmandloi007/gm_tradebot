@@ -10,23 +10,21 @@ from pages.place_gtt_order import show_place_gtt_order
 from pages.place_oco_order import show_place_oco_order
 from pages.dashboard import show_dashboard
 
-# Import update_master script
-from scripts import update_master  # <-- yahan se call hoga
-
 # ---- Page config ----
 st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
 st.title("📊 Trade Dashboard")
 
-# ---- Sidebar: Tools & Page Selection ----
-with st.sidebar:
-    st.header("⚙️ Tools")
-    if st.button("Update Master File"):
+# ---- Sidebar: Master File Update Button ----
+import script.update_master as um  # Make sure this path is correct
+
+if st.sidebar.button("🔄 Update Master File"):
+    client = st.session_state.get("client")  # pass client if logged in
+    try:
         st.info("Downloading and updating master file...")
-        try:
-            update_master.download_master("All Segments")
-            st.success("✅ Master file updated successfully!")
-        except Exception as e:
-            st.error(f"Failed to update master file: {e}")
+        um.download_and_extract(client)
+        st.success("✅ Master file updated successfully!")
+    except Exception as e:
+        st.error(f"Failed to update master file: {e}")
 
 # ---- Sidebar: Radio Buttons for Page Selection ----
 page = st.sidebar.radio(
@@ -72,3 +70,4 @@ else:
         show_place_oco_order()
     elif page ==  "Dashboard":
         show_dashboard()
+        
