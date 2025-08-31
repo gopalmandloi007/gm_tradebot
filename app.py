@@ -7,7 +7,7 @@ from pages.login import show as show_login
 from pages.place_order import show as show_place_order
 from pages.gtt_orderbook import show as show_gtt_orderbook
 from pages.positions import show as show_positions   # ✅ Positions page import
-from pages import place_gtt_order as show_place_gtt_order
+from pages.place_gtt_order import show_place_gtt_order
 
 # ---- Page config ----
 st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
