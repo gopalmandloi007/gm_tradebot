@@ -8,6 +8,7 @@ from pages.place_order import show as show_place_order
 from pages.gtt_orderbook import show as show_gtt_orderbook
 from pages.positions import show as show_positions   # ✅ Positions page import
 from pages.place_gtt_order import show_place_gtt_order
+from pages.place_oco_order import show_place_oco_order
 
 # ---- Page config ----
 st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
@@ -24,7 +25,8 @@ page = st.sidebar.radio(
         "Trades",
         "Place Order",
         "GTT Order Book",
-        "Place GTT Order"
+        "Place GTT Order",
+        "Place OCO Order"
     ]
 )
 
@@ -51,4 +53,6 @@ else:
         show_gtt_orderbook()
     elif page == "Place GTT Order":   # ✅ Fixed syntax
         show_place_gtt_order()
+    elif page == " Place OCO Order":
+        show_place_oco_order()
         
