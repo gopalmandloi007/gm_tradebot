@@ -5,9 +5,7 @@ import io
 import requests
 import zipfile
 from definedge_api import DefinedgeClient
-import time
 
-# ---- Master file in session ----
 def load_master_symbols():
     if "master_df" not in st.session_state:
         try:
@@ -47,24 +45,30 @@ def show_place_order():
 
         # Fetch LTP once for default price
         if "price_input" not in st.session_state or st.session_state.get("symbol_selected") != tradingsymbol:
-            ltp_initial = client.get_quotes(exchange, token).get("ltp",0.0)
+            try:
+                ltp_initial = float(client.get_quotes(exchange, token).get("ltp",0.0))
+            except:
+                ltp_initial = 0.0
             st.session_state["price_input"] = ltp_initial
             st.session_state["symbol_selected"] = tradingsymbol
 
-        # Editable price (initially LTP)
-        price_input = st.number_input("Price (editable)", min_value=0.0, step=0.05, value=st.session_state["price_input"])
+        # Editable price
+        price_input = st.number_input("Price (editable)", min_value=0.0, step=0.05, value=float(st.session_state["price_input"]))
 
         # Auto-refresh LTP in separate container
         ltp_container = st.empty()
         try:
-            ltp_live = client.get_quotes(exchange, token).get("ltp",0.0)
+            ltp_live = float(client.get_quotes(exchange, token).get("ltp",0.0))
             ltp_container.markdown(f"**Live LTP:** {ltp_live}")
         except:
             ltp_container.markdown("**Live LTP:** --")
 
         # Cash limits
-        limits = client.api_get("/limits")
-        cash_avail = float(limits.get("cash",0))
+        try:
+            limits = client.api_get("/limits")
+            cash_avail = float(limits.get("cash",0))
+        except:
+            cash_avail = 0.0
         st.info(f"💰 Cash Available: ₹{cash_avail:,.2f}")
 
         # Place by qty or amount
@@ -99,6 +103,7 @@ def show_place_order():
         except:
             st.warning("Unable to fetch required margin")
 
+        # ---- Submit button ----
         submitted = st.form_submit_button("🚀 Place Order")
 
     if submitted:
@@ -132,4 +137,4 @@ def show_place_order():
 
         except Exception as e:
             st.error(f"Order placement failed: {e}")
-            
+        
