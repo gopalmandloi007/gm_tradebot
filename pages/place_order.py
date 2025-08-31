@@ -1,102 +1,97 @@
 # pages/place_order.py
 import streamlit as st
 import pandas as pd
-import io
-import requests
 import os
+import requests
+import io
 import traceback
 from definedge_api import DefinedgeClient
 
-# --- Constants ---
-MASTER_FOLDER = "data/master"
-MASTER_FILE = os.path.join(MASTER_FOLDER, "nsecash.csv")
+# --- Path to store master file locally ---
+MASTER_FILE_PATH = "data/master/allmaster.csv"
+MASTER_FOLDER = "data/master/"
 
-# --- Helper: Download master file ---
+# --- Function to download master file ---
 def download_master_file():
     os.makedirs(MASTER_FOLDER, exist_ok=True)
-    url = "https://app.definedgesecurities.com/public/nsecash.zip"
-    zip_path = os.path.join(MASTER_FOLDER, "nsecash.zip")
+    url = "https://app.definedgesecurities.com/public/allmaster.zip"
+    r = requests.get(url)
+    r.raise_for_status()
+    import zipfile, tempfile
+    with tempfile.NamedTemporaryFile(delete=False) as tmpfile:
+        tmpfile.write(r.content)
+        tmpfile.flush()
+        with zipfile.ZipFile(tmpfile.name, 'r') as zip_ref:
+            zip_ref.extractall(MASTER_FOLDER)
+    # The extracted file is usually named allmaster.csv
+    return os.path.join(MASTER_FOLDER, "allmaster.csv")
 
-    try:
-        # Download zip
-        r = requests.get(url, stream=True, timeout=25)
-        r.raise_for_status()
-        with open(zip_path, "wb") as f:
-            for chunk in r.iter_content(1024 * 32):
-                f.write(chunk)
-
-        # Extract CSV
-        import zipfile
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            for file in zip_ref.namelist():
-                if file.endswith(".csv"):
-                    zip_ref.extract(file, MASTER_FOLDER)
-                    os.rename(os.path.join(MASTER_FOLDER, file), MASTER_FILE)
-
-        return True, f"Master file saved at {MASTER_FILE}"
-
-    except Exception as e:
-        return False, str(e)
-
-# --- Helper: Load master symbols ---
+# --- Load master symbols ---
+@st.cache_data
 def load_master_symbols():
-    if not os.path.exists(MASTER_FILE):
-        st.warning("Master file not found. Downloading...")
-        success, msg = download_master_file()
-        if not success:
-            st.error(f"Failed to download master file: {msg}")
-            return pd.DataFrame()
-        else:
-            st.success(msg)
+    if not os.path.exists(MASTER_FILE_PATH):
+        MASTER_FILE = download_master_file()
+    else:
+        MASTER_FILE = MASTER_FILE_PATH
+    df = pd.read_csv(MASTER_FILE, header=None)
+    # Definedge master columns
+    df.columns = ["segment", "token", "symbol", "tradingsym", "instrument_type",
+                  "expiry", "ticksize", "lotsize", "optiontype", "strike",
+                  "priceprec", "multiplier", "isin", "pricemult", "company"]
+    # Keep only NSE/BSE cash or FNO if needed
+    df = df[df["segment"].isin(["NSE", "BSE", "NFO"])]
+    return df
 
-    try:
-        df = pd.read_csv(MASTER_FILE, header=None)
-        # Ensure expected columns (adjust if needed)
-        if df.shape[1] < 3:
-            st.error("Master CSV format not correct!")
-            return pd.DataFrame()
-        df.columns = ["segment", "token", "symbol"] + [f"col{i}" for i in range(4, df.shape[1]+1)]
-        df = df[df["segment"] == "NSE"]
-        return df
-    except Exception as e:
-        st.error(f"Failed to read master CSV: {e}")
-        return pd.DataFrame()
-
-# --- Main place order function ---
-def show_place_order():
+# --- Streamlit page ---
+def show():
     st.header("🛒 Place Order — Definedge")
 
-    client: DefinedgeClient = st.session_state.get("client")
+    client = st.session_state.get("client")
     if not client:
         st.error("⚠️ Not logged in. Please login first from the Login page.")
         return
 
-    # --- Load master symbols ---
-    df_symbols = load_master_symbols()
-    if df_symbols.empty:
-        st.stop()
+    # Load master file
+    try:
+        df_symbols = load_master_symbols()
+    except Exception as e:
+        st.error(f"Failed to load master symbols: {e}")
+        return
 
     with st.form("place_order_form"):
         st.subheader("Order Details")
 
-        exchange = st.selectbox("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=0)
-        tradingsymbol = st.selectbox("Trading Symbol", df_symbols["symbol"].tolist())
+        exchange = st.selectbox("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=2)  # default NFO
 
-        # Auto fetch LTP for selected symbol
+        # Show trading symbol + company
+        tradingsym_option = df_symbols.apply(lambda x: f"{x['tradingsym']} ({x['company']})", axis=1)
+        selected_option = st.selectbox("Trading Symbol", tradingsym_option)
+        selected_tradingsym = selected_option.split(" ")[0]
+        token = df_symbols[df_symbols["tradingsym"] == selected_tradingsym]["token"].values[0]
+
+        # Fetch LTP automatically
         ltp = 0.0
-        token = df_symbols[df_symbols["symbol"] == tradingsymbol]["token"].values[0]
         try:
-            quote = client.get_quotes(exchange="NSE", token=str(token))
+            quote = client.get_quotes(exchange=exchange, token=str(token))
             ltp = float(quote.get("ltp", 0))
-        except:
-            ltp = 0.0
+        except Exception as e:
+            st.warning(f"Failed to fetch LTP: {e}")
 
-        price = st.number_input("Price", min_value=0.0, step=0.05, value=ltp)
+        # Price type radio
+        price_type = st.radio("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"], index=0)
+        price = st.number_input("Price", value=ltp if ltp>0 else 0.0, step=0.05, format="%.2f")
+
+        # Quantity or Amount
+        order_mode = st.radio("Order Mode", ["Quantity", "Amount"])
+        if order_mode == "Quantity":
+            quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
+            amount = 0.0
+        else:
+            amount = st.number_input("Amount (₹)", min_value=1.0, step=0.05, value=ltp*1 if ltp>0 else 0.0)
+            quantity = int(amount/price) if price>0 else 0
 
         order_type = st.selectbox("Order Type", ["BUY", "SELL"])
         product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=2)
-        price_type = st.selectbox("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"], index=0)
-        quantity = st.number_input("Quantity", min_value=1, step=1, value=50)
         trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
         validity = st.selectbox("Validity", ["DAY", "IOC", "EOS"], index=0)
         remarks = st.text_input("Remarks (optional)", "")
@@ -107,7 +102,8 @@ def show_place_order():
         try:
             payload = {
                 "exchange": exchange,
-                "tradingsymbol": tradingsymbol.strip(),
+                "tradingsymbol": selected_tradingsym,
+                "token": str(token),
                 "order_type": order_type,
                 "price": str(price),
                 "price_type": price_type,
