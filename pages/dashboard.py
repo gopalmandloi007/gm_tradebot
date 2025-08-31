@@ -16,7 +16,7 @@ def show_dashboard():
 
     try:
         # Fetch Holdings
-        holdings_resp = client.holdings()
+        holdings_resp = client.get_holdings()
         if holdings_resp.get("status") != "SUCCESS":
             st.error(f"⚠️ Holdings fetch failed: {holdings_resp.get('message')}")
             return
