@@ -101,6 +101,9 @@ class DefinedgeClient:
     def gtt_place(self, payload: Dict[str, Any]):
         return self.api_post("/gttplaceorder", payload)
 
+    def oco_place(self, payload: Dict[str, Any]):
+        return self.api_post("/ocoplaceorder", payload)
+
     def gtt_modify(self, payload: Dict[str, Any]):
         return self.api_post("/gttmodify", payload)
 
