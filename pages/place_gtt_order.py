@@ -1,55 +1,78 @@
+# pages/place_gtt_order.py
 import streamlit as st
-import requests
+import traceback
 
 def show():
-    st.subheader("📌 Place GTT Order")
+    st.header("📌 Place GTT Order — Definedge")
 
-    if "client" not in st.session_state:
-        st.warning("⚠️ Please login first.")
+    client = st.session_state.get("client")
+    if not client:
+        st.error("⚠️ Not logged in. Please login first from the Login page.")
         st.stop()
 
-    # ---- Form for GTT order ----
-    with st.form("gtt_order_form"):
-        exchange = st.selectbox("Exchange", ["NSE", "BSE"])
-        tradingsymbol = st.text_input("Trading Symbol", "TCS-EQ")
-        condition = st.selectbox("Condition", ["LTP_ABOVE", "LTP_BELOW"])
-        alert_price = st.number_input("Alert Price", min_value=0.0, value=3100.0, step=0.05)
-        order_type = st.selectbox("Order Type", ["BUY", "SELL"])
-        price = st.number_input("Order Price", min_value=0.0, value=3100.0, step=0.05)
-        quantity = st.number_input("Quantity", min_value=1, value=1, step=1)
-        product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"])
+    # Optional debug toggle
+    debug = st.checkbox("Show debug info", value=False)
 
+    with st.form("gtt_place_form"):
+        exchange = st.selectbox("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=0)
+        tradingsymbol = st.text_input("Trading Symbol (e.g. TCS-EQ)", value="")
+        condition = st.selectbox("Condition", ["LTP_ABOVE", "LTP_BELOW"], index=0)
+        alert_price = st.number_input("Alert Price", min_value=0.0, format="%.2f", step=0.05)
+        order_type = st.selectbox("Order Type", ["BUY", "SELL"])
+        price = st.number_input("Order Price (price to place order)", min_value=0.0, format="%.2f", step=0.05, value=alert_price)
+        quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
+        product_type = st.selectbox("Product Type (optional)", ["", "CNC", "INTRADAY", "NORMAL"], index=0)
+        remarks = st.text_input("Remarks (optional)", "")
         submitted = st.form_submit_button("🚀 Place GTT Order")
 
     if submitted:
-        headers = {
-            "Authorization": st.session_state["client"].access_token,  # Token from login
-            "Content-Type": "application/json"
-        }
+        # basic validation
+        if not tradingsymbol.strip():
+            st.error("Please provide a trading symbol.")
+            return
 
         payload = {
             "exchange": exchange,
-            "tradingsymbol": tradingsymbol,
+            "tradingsymbol": tradingsymbol.strip(),
             "condition": condition,
             "alert_price": str(alert_price),
             "order_type": order_type,
             "price": str(price),
-            "quantity": str(quantity),
-            "product_type": product_type
+            "quantity": str(int(quantity)),
         }
+        if product_type:
+            payload["product_type"] = product_type
+        if remarks:
+            payload["remarks"] = remarks
+
+        if debug:
+            st.write("🔎 Debug: payload to send")
+            st.json(payload)
 
         try:
-            url = st.session_state["client"].base_url + "/gttplaceorder"
-            response = requests.post(url, headers=headers, json=payload)
+            # Use your Definedge client's wrapper (no base URL or manual headers here)
+            resp = client.gtt_place(payload)
 
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("status") == "SUCCESS":
-                    st.success(f"✅ {data.get('message')} (Alert ID: {data.get('alert_id')})")
-                else:
-                    st.error(f"⚠️ {data.get('message')}")
+            if debug:
+                st.write("🔎 Debug: raw API response")
+                st.write(resp)
+
+            # Expected response: { "status": "SUCCESS", "alert_id": "...", "message": "...", "request_time": "..." }
+            if isinstance(resp, dict) and resp.get("status") == "SUCCESS":
+                alert_id = resp.get("alert_id")
+                msg = resp.get("message") or "GTT order placed"
+                st.success(f"✅ {msg} — Alert ID: {alert_id}")
+                st.write(resp)
             else:
-                st.error(f"❌ API Error: {response.text}")
-
+                # If API returns non-success but valid structure, show friendly info
+                st.error(f"❌ Failed to place GTT order. Response: {resp}")
         except Exception as e:
-            st.error(f"🚨 Exception: {e}")
+            st.error(f"🚨 Exception while placing GTT order: {e}")
+            st.text(traceback.format_exc())
+
+    # quick hint
+    st.markdown(
+        "Hint: After successful placement, you can open **GTT Order Book** page to verify the new alert. "
+        "If GTT order doesn't appear immediately, call refresh on that page."
+    )
+    
