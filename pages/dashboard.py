@@ -54,7 +54,7 @@ def show_dashboard():
             token = row["Token"]
 
             # a) Latest quote for LTP
-            quote_resp = client.get_quote(exchange="NSE", token=token)
+            quote_resp = client.get_quotes(exchange="NSE", token=token)
             ltp = float(quote_resp.get("ltp", 0))
             ltp_list.append(ltp)
 
