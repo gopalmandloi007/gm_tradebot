@@ -4,7 +4,7 @@ import traceback
 import pandas as pd
 
 def show():
-    st.header("📑 Orderbook — Definedge")
+    st.header("📑 Orderbook — Definedge (Manage by Symbol)")
 
     client = st.session_state.get("client")
     if not client:
@@ -29,66 +29,79 @@ def show():
                 st.info("No orders found in orderbook today.")
                 return
 
-            # Convert to dataframe
             df = pd.DataFrame(orders)
             st.success(f"✅ Orderbook fetched ({len(df)} orders)")
-
-            # show dataframe in a compact form
             st.dataframe(df, use_container_width=True)
 
-            # --- Action Area: Cancel / Modify ---
-            st.subheader("⚙️ Manage Orders")
-
-            order_ids = df["order_id"].tolist() if "order_id" in df.columns else []
-
-            if not order_ids:
-                st.info("⚠️ No order_id found in response to manage.")
+            # --- Manage Orders by Symbol ---
+            st.subheader("⚙️ Manage Orders by Symbol")
+            symbols = df["tradingsymbol"].unique().tolist() if "tradingsymbol" in df.columns else []
+            if not symbols:
+                st.info("⚠️ No tradingsymbol found in response to manage.")
                 return
 
-            selected_order = st.selectbox("Select an order to manage:", order_ids)
+            selected_symbol = st.selectbox("Select a symbol to manage:", symbols)
+            symbol_orders = df[df["tradingsymbol"] == selected_symbol]
 
-            col1, col2 = st.columns(2)
+            if symbol_orders.empty:
+                st.warning("⚠️ No orders found for this symbol")
+                return
 
-            # Cancel Button
-            with col1:
-                if st.button("❌ Cancel Selected Order"):
-                    try:
-                        cancel_resp = client.cancel_order(order_id=selected_order)
-                        st.write("🔎 Cancel API Response:", cancel_resp)
-                        if cancel_resp.get("status") == "SUCCESS":
-                            st.success(f"Order {selected_order} cancelled successfully ✅")
-                        else:
-                            st.error(f"Cancel failed: {cancel_resp}")
-                    except Exception as e:
-                        st.error(f"Cancel API failed: {e}")
-                        st.text(traceback.format_exc())
+            st.write(f"📋 Orders for {selected_symbol}:")
+            for idx, order in symbol_orders.iterrows():
+                st.markdown("---")
+                st.write(f"**Order ID:** {order['order_id']}")
+                st.write(f"Exchange: {order.get('exchange', '')}, Type: {order.get('order_type', '')}, "
+                         f"Qty: {order.get('quantity', '')}, Price: {order.get('price', '')}, "
+                         f"Product: {order.get('product_type', '')}, Status: {order.get('status', '')}")
 
-            # Modify Form
-            with col2:
-                with st.form("modify_order_form"):
-                    st.write("✏️ Modify Order")
-                    new_price = st.text_input("New Price", "")
-                    new_qty = st.text_input("New Quantity", "")
-                    submitted = st.form_submit_button("Update Order")
+                col1, col2 = st.columns(2)
 
-                    if submitted:
+                # Cancel Button
+                with col1:
+                    if st.button(f"❌ Cancel {order['order_id']}"):
                         try:
-                            payload = {
-                                "order_id": selected_order,
-                                "price": float(new_price) if new_price else None,
-                                "quantity": int(new_qty) if new_qty else None,
-                            }
-                            modify_resp = client.modify_order(payload)
-                            st.write("🔎 Modify API Response:", modify_resp)
-                            if modify_resp.get("status") == "SUCCESS":
-                                st.success(f"Order {selected_order} modified successfully ✅")
+                            cancel_resp = client.cancel_order(order_id=order['order_id'])
+                            st.write("🔎 Cancel API Response:", cancel_resp)
+                            if cancel_resp.get("status") == "SUCCESS":
+                                st.success(f"Order {order['order_id']} cancelled successfully ✅")
                             else:
-                                st.error(f"Modify failed: {modify_resp}")
+                                st.error(f"Cancel failed: {cancel_resp}")
                         except Exception as e:
-                            st.error(f"Modify API failed: {e}")
+                            st.error(f"Cancel API failed: {e}")
                             st.text(traceback.format_exc())
+
+                # Modify Form
+                with col2:
+                    with st.form(f"modify_form_{order['order_id']}"):
+                        st.write("✏️ Modify Order")
+                        new_price = st.text_input("New Price", str(order.get("price", "")), key=f"price_{order['order_id']}")
+                        new_qty = st.text_input("New Quantity", str(order.get("quantity", "")), key=f"qty_{order['order_id']}")
+                        submitted = st.form_submit_button("Update Order", key=f"submit_{order['order_id']}")
+
+                        if submitted:
+                            try:
+                                payload = {
+                                    "order_id": order['order_id'],
+                                    "exchange": order.get("exchange"),
+                                    "tradingsymbol": selected_symbol,
+                                    "order_type": order.get("order_type"),
+                                    "price": float(new_price) if new_price else None,
+                                    "quantity": int(new_qty) if new_qty else None,
+                                    "product_type": order.get("product_type", "NORMAL"),
+                                    "price_type": order.get("price_type", "LIMIT"),
+                                }
+                                modify_resp = client.modify_order(payload)
+                                st.write("🔎 Modify API Response:", modify_resp)
+                                if modify_resp.get("status") == "SUCCESS":
+                                    st.success(f"Order {order['order_id']} modified successfully ✅")
+                                else:
+                                    st.error(f"Modify failed: {modify_resp}")
+                            except Exception as e:
+                                st.error(f"Modify API failed: {e}")
+                                st.text(traceback.format_exc())
 
         except Exception as e:
             st.error(f"Fetching orderbook failed: {e}")
             st.text(traceback.format_exc())
-                    
+            
