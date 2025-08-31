@@ -1,64 +1,37 @@
-# orderbook.py
+# pages/orderbook.py
 import streamlit as st
+import traceback
 import pandas as pd
-import requests
 
 def show():
-    st.title("📈 Order Book Page (All Fields)")
+    st.header("📑 Orderbook — Definedge")
 
     client = st.session_state.get("client")
     if not client:
-        st.error("⚠️ Not logged in")
-        st.stop()
+        st.error("⚠️ Not logged in. Please login first from the Login page.")
+        return
 
-    st.write("🔎 Debug: Current session_state keys:", list(st.session_state.keys()))
-
-    try:
-        # ---- API call ----
-        api_key = getattr(client, "api_session_key", None)
-        if not api_key:
-            st.error("⚠️ API session key missing. Please login again.")
-            st.stop()
-
-        url = "https://api.definedge.com/orders"  # replace with actual base URL
-        headers = {"Authorization": api_key}
-
-        resp = requests.get(url, headers=headers, timeout=10)
-
-        if resp.status_code != 200 or not resp.text.strip():
-            st.error(f"⚠️ API returned error or empty response: {resp.status_code}")
-            st.stop()
-
-        data = resp.json()
-        st.write("🔎 Debug: Raw API response:", data)
-
-        if data.get("status") != "SUCCESS":
-            st.error("⚠️ Order Book API failed")
-            st.stop()
-
-        # ---- Use 'orders' field instead of 'data' ----
-        raw_data = data.get("orders", [])
-        st.write("🔎 Debug: Extracted orders field:", raw_data)
-
-        # ---- Flatten all fields (Only NSE) ----
-        records = []
-        for o in raw_data:
-            base = {k: v for k, v in o.items() if k != "tradingsymbol"}
-            # tradingsymbol is already present, but keep consistency
-            if "exchange" in o and o["exchange"] == "NSE":
-                row = {**base}  # include tradingsymbol + all fields
-                records.append(row)
-
-        st.write("🔎 Debug: Flattened records:", records)
-
-        if records:
-            df = pd.DataFrame(records)
-            st.success(f"✅ NSE Orders found: {len(df)}")
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.warning("⚠️ No NSE orders found")
-
-    except requests.exceptions.RequestException as e:
-        st.error(f"⚠️ Network/API request error: {e}")
-    except Exception as e:
-        st.error(f"⚠️ Something went wrong: {e}")
+    if st.button("Fetch Orderbook"):
+        try:
+            orders = client.get_orders()   # this is the orderbook
+            if isinstance(orders, dict) and "data" in orders:
+                df = pd.DataFrame(orders["data"])
+                if not df.empty:
+                    st.success("✅ Orderbook fetched successfully")
+                    st.dataframe(df)
+                else:
+                    st.info("No active orders in the orderbook.")
+            elif isinstance(orders, list):
+                df = pd.DataFrame(orders)
+                if not df.empty:
+                    st.success("✅ Orderbook fetched successfully")
+                    st.dataframe(df)
+                else:
+                    st.info("No active orders in the orderbook.")
+            else:
+                st.warning("Unexpected response format")
+                st.json(orders)
+        except Exception as e:
+            st.error(f"Fetching orderbook failed: {e}")
+            st.text(traceback.format_exc())
+            
