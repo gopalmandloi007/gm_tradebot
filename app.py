@@ -15,7 +15,7 @@ st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
 st.title("📊 Trade Dashboard")
 
 # ---- Sidebar: Master File Update Button ----
-import script.update_master as um  # Make sure this path is correct
+import scripts.update_master as um  # Make sure this path is correct
 
 if st.sidebar.button("🔄 Update Master File"):
     client = st.session_state.get("client")  # pass client if logged in
