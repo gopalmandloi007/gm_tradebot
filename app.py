@@ -5,6 +5,7 @@ from pages.orderbook import show as show_orderbook
 from pages.trades import show as show_trades
 from pages.login import show as show_login
 from pages.place_order import show as show_place_order  # NEW
+from pages.gtt_orderbook import show as show_gtt_orderbook
 
 st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
 st.title("📊 Trade Dashboard")
@@ -12,7 +13,7 @@ st.title("📊 Trade Dashboard")
 # ---- Sidebar: Radio Buttons for Page Selection ----
 page = st.sidebar.radio(
     "Select Page",
-    ["Login", "Holdings", "Positions", "Order Book", "Trades", "Place Order"]
+    ["Login", "Holdings", "Positions", "Order Book", "Trades", "Place Order", "GTT Order Book]
 )
 
 # ---- Show selected page ----
@@ -27,10 +28,14 @@ else:
     # Show pages
     if page == "Holdings" or page == "Positions":
         show_holdings()  # Positions can also use show_holdings or separate function
+    elif page == "Positions"
+        show_positions()
     elif page == "Order Book":
         show_orderbook()
     elif page == "Trades":
         show_trades()
     elif page == "Place Order":
         show_place_order()
+    elif page == "GTT Order Book":
+        show_gtt_orderbook()
         
