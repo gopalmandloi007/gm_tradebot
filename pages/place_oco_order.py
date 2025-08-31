@@ -1,10 +1,9 @@
 import streamlit as st
 import requests
 
-def show_place_oco_order():
+def show_place_oco_order():   # ✅ function name correct
     st.title("🟢 Place OCO Order")
 
-    # Agar login nahi hai to rok do
     if "client" not in st.session_state:
         st.warning("⚠️ Please login first.")
         return
@@ -24,7 +23,6 @@ def show_place_oco_order():
 
     st.markdown("---")
 
-    # ---- Button ----
     if st.button("🚀 Place OCO Order"):
         try:
             url = st.session_state["client"]["base_url"] + "/ocoplaceorder"
