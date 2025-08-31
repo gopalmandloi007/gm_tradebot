@@ -2,107 +2,153 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
+import io
 import traceback
+import plotly.graph_objects as go
 
 def show_dashboard():
     st.header("📊 Trading Dashboard — Definedge")
 
     client = st.session_state.get("client")
     if not client:
-        st.error("⚠️ Not logged in. Please login first from the Login page.")
+        st.error("⚠️ Not logged in. Please login first from Login page.")
         st.stop()
 
     debug = st.checkbox("Show debug info", value=False)
 
     try:
-        # --- Step 1: Fetch Holdings ---
+        # 1️⃣ Fetch Holdings
         holdings_resp = client.get_holdings()
-        if not holdings_resp or holdings_resp.get("status") != "SUCCESS":
-            st.error(f"Failed to fetch holdings. Response: {holdings_resp}")
+        if holdings_resp.get("status") != "SUCCESS":
+            st.error(f"Failed to fetch holdings: {holdings_resp}")
             return
 
-        holdings = holdings_resp.get("holdings", [])
-        if not holdings:
+        holdings_data = holdings_resp.get("data", [])
+        if not holdings_data:
             st.info("✅ No holdings found.")
             return
 
-        # --- Step 2: Prepare DataFrame ---
-        df = pd.DataFrame(holdings)
-        # Ensure numeric fields
-        df["quantity"] = df["quantity"].astype(float)
-        df["average_price"] = df["average_price"].astype(float)
+        # Flatten holdings (multiple tradingsymbol per holding)
+        flat_rows = []
+        for h in holdings_data:
+            for ts in h.get("tradingsymbol", []):
+                row = {
+                    "Symbol": ts.get("tradingsymbol"),
+                    "Exchange": ts.get("exchange"),
+                    "Token": ts.get("token"),
+                    "Qty": int(h.get("t1_qty", 0)) + int(h.get("dp_qty", 0)),
+                    "Avg_Buy_Price": float(h.get("avg_buy_price", 0)),
+                    "Lotsize": int(ts.get("lotsize", 1)),
+                    "Remarks": ""
+                }
+                flat_rows.append(row)
+        df = pd.DataFrame(flat_rows)
 
-        # --- Step 3: Fetch LTP & Previous Close ---
-        ltp_list = []
-        prev_close_list = []
-        today_pnl_list = []
-        overall_pnl_list = []
+        if df.empty:
+            st.info("✅ No valid holdings found.")
+            return
 
+        # 2️⃣ Fetch LTP for each symbol
+        ltps = []
+        prev_closes = []
         for idx, row in df.iterrows():
-            exchange = row.get("exchange")
-            token = row.get("token")
-            quantity = row.get("quantity")
-            avg_price = row.get("average_price")
+            try:
+                quote = client.get_quote(row["Exchange"], row["Token"])
+                ltp = float(quote.get("ltp", 0))
+                ltps.append(ltp)
 
-            # Get latest quote
-            quote_resp = client.get_quotes(exchange, token)
-            ltp = float(quote_resp.get("ltp") or 0)
-            ltp_list.append(ltp)
+                # 3️⃣ Fetch Previous Close using Historical API (last available day)
+                today = datetime.today()
+                from_date = (today - timedelta(days=10)).strftime("%d%m%Y%H%M")
+                to_date = today.strftime("%d%m%Y%H%M")
+                hist_csv = client.get_historical(
+                    segment=row["Exchange"],
+                    token=row["Token"],
+                    timeframe="day",
+                    from_dt=from_date,
+                    to_dt=to_date
+                )
+                hist_df = pd.read_csv(io.StringIO(hist_csv), header=None,
+                                      names=["Date","Open","High","Low","Close","Volume","OI"])
+                prev_close = hist_df["Close"].iloc[-2] if len(hist_df) > 1 else hist_df["Close"].iloc[-1]
+                prev_closes.append(prev_close)
 
-            # Previous close: use historical daily data
-            today_date = datetime.now().strftime("%d%m%Y%H%M")
-            prev_date = (datetime.now() - timedelta(days=1)).strftime("%d%m%Y%H%M")
-            hist_csv = client.historical_csv(
-                segment=exchange,
-                token=token,
-                timeframe="day",
-                frm=prev_date,
-                to=today_date
-            )
-            hist_df = pd.read_csv(pd.compat.StringIO(hist_csv), header=None,
-                                  names=["datetime","open","high","low","close","volume","oi"])
-            prev_close = float(hist_df["close"].iloc[-2]) if len(hist_df) > 1 else float(hist_df["close"].iloc[-1])
-            prev_close_list.append(prev_close)
+            except Exception as e:
+                if debug:
+                    st.warning(f"Failed fetching quote/historical for {row['Symbol']}: {e}")
+                ltps.append(0)
+                prev_closes.append(0)
 
-            # Today PnL = (ltp - prev_close) * quantity
-            today_pnl = (ltp - prev_close) * quantity
-            today_pnl_list.append(today_pnl)
+        df["LTP"] = ltps
+        df["Prev_Close"] = prev_closes
 
-            # Overall PnL = (ltp - avg_price) * quantity
-            overall_pnl = (ltp - avg_price) * quantity
-            overall_pnl_list.append(overall_pnl)
+        # 4️⃣ Calculate PnL
+        df["Today_PnL"] = (df["LTP"] - df["Prev_Close"]) * df["Qty"] * df["Lotsize"]
+        df["Overall_PnL"] = (df["LTP"] - df["Avg_Buy_Price"]) * df["Qty"] * df["Lotsize"]
 
-        df["ltp"] = ltp_list
-        df["prev_close"] = prev_close_list
-        df["today_pnl"] = today_pnl_list
-        df["overall_pnl"] = overall_pnl_list
+        # 5️⃣ Editable table for Remarks
+        st.subheader("📋 Holdings Table")
+        edited_df = st.data_editor(
+            df,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "Remarks": st.column_config.TextColumn("Remarks", default=""),
+            }
+        )
 
-        # --- Step 4: Top Summary ---
-        total_investment = (df["average_price"] * df["quantity"]).sum()
-        total_current_value = (df["ltp"] * df["quantity"]).sum()
-        total_today_pnl = df["today_pnl"].sum()
-        total_overall_pnl = df["overall_pnl"].sum()
+        # 6️⃣ Show overall summary
+        st.subheader("💰 Portfolio Summary")
+        st.metric("Total Invested", f"₹{(df['Avg_Buy_Price']*df['Qty']*df['Lotsize']).sum():.2f}")
+        st.metric("Current Value", f"₹{(df['LTP']*df['Qty']*df['Lotsize']).sum():.2f}")
+        st.metric("Overall PnL", f"₹{df['Overall_PnL'].sum():.2f}")
+        st.metric("Today's PnL", f"₹{df['Today_PnL'].sum():.2f}")
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("💰 Total Investment", f"{total_investment:.2f}")
-        col2.metric("📈 Current Value", f"{total_current_value:.2f}")
-        col3.metric("📊 Today PnL", f"{total_today_pnl:.2f}")
-        col4.metric("🏦 Overall PnL", f"{total_overall_pnl:.2f}")
-
-        # --- Step 5: Display Holdings Table ---
-        st.subheader("🔹 Individual Holdings")
-        display_cols = ["tradingsymbol", "exchange", "quantity", "average_price",
-                        "ltp", "prev_close", "today_pnl", "overall_pnl"]
-        st.dataframe(df[display_cols].sort_values(by="overall_pnl", ascending=False), use_container_width=True)
-
-        # CSV Export
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download Holdings CSV", csv, "holdings_dashboard.csv", "text/csv")
-
-        if debug:
-            st.write("🔎 Debug: Raw holdings with quotes and PnL")
-            st.dataframe(df)
+        # 7️⃣ Stock selection for charts
+        st.subheader("📈 Stock Charts")
+        selected_symbols = st.multiselect(
+            "Select stocks to view charts",
+            df["Symbol"].tolist()
+        )
+        for sym in selected_symbols:
+            s_row = df[df["Symbol"]==sym].iloc[0]
+            try:
+                # Fetch last 100 days historical
+                today = datetime.today()
+                from_date = (today - timedelta(days=150)).strftime("%d%m%Y%H%M")
+                to_date = today.strftime("%d%m%Y%H%M")
+                hist_csv = client.get_historical(
+                    segment=s_row["Exchange"],
+                    token=s_row["Token"],
+                    timeframe="day",
+                    from_dt=from_date,
+                    to_dt=to_date
+                )
+                hist_df = pd.read_csv(io.StringIO(hist_csv), header=None,
+                                      names=["Date","Open","High","Low","Close","Volume","OI"])
+                hist_df["Date"] = pd.to_datetime(hist_df["Date"])
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(
+                    x=hist_df["Date"],
+                    open=hist_df["Open"],
+                    high=hist_df["High"],
+                    low=hist_df["Low"],
+                    close=hist_df["Close"],
+                    name=sym
+                ))
+                fig.add_trace(go.Scatter(
+                    x=hist_df["Date"],
+                    y=[s_row["Avg_Buy_Price"]]*len(hist_df),
+                    mode="lines",
+                    line=dict(color="blue", dash="dash"),
+                    name="Avg Buy Price"
+                ))
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                if debug:
+                    st.warning(f"Failed chart for {sym}: {e}")
 
     except Exception as e:
-        st.error(f"🚨 Dashboard generation failed: {e}")
+        st.error(f"🚨 Dashboard failed: {e}")
         st.text(traceback.format_exc())
+        
