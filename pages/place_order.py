@@ -3,23 +3,18 @@ import streamlit as st
 import pandas as pd
 import io
 import requests
-from datetime import datetime
+import zipfile
 from definedge_api import DefinedgeClient
+import time
 
 # ---- Master file in session ----
-MASTER_FILE = "master_symbols.csv"
-
 def load_master_symbols():
-    # Download master file if not present in session
     if "master_df" not in st.session_state:
         try:
             r = requests.get("https://app.definedgesecurities.com/public/allmaster.zip", timeout=20)
-            import zipfile
             z = zipfile.ZipFile(io.BytesIO(r.content))
-            # Assuming CSV inside zip has name 'allmaster.csv'
             csv_name = [f for f in z.namelist() if f.endswith(".csv")][0]
             df = pd.read_csv(z.open(csv_name), header=None)
-            # Add column names
             df.columns = ["SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT_TYPE","EXPIRY",
                           "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER","ISIN","PRICEMULT","COMPANY"]
             st.session_state["master_df"] = df
@@ -28,18 +23,8 @@ def load_master_symbols():
             return pd.DataFrame()
     return st.session_state["master_df"]
 
-# ---- Get LTP ----
-def get_ltp(client, exchange, token):
-    try:
-        q = client.get_quotes(exchange, token)
-        return float(q.get("ltp",0.0))
-    except:
-        return 0.0
-
-# ---- Show Place Order ----
 def show_place_order():
     st.header("🛒 Place Order — Definedge")
-
     client: DefinedgeClient = st.session_state.get("client")
     if not client:
         st.error("⚠️ Please login first from the Login page.")
@@ -53,48 +38,66 @@ def show_place_order():
     with st.form("place_order_form"):
         st.subheader("Order Details")
 
-        exchange = st.radio("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=0)
+        # Exchange selection
+        exchange = st.radio("Exchange", ["NSE","BSE","NFO","MCX"], index=0)
 
-        # Filter symbols by selected exchange
-        df_seg = df_symbols[df_symbols["SEGMENT"] == exchange]
-
-        tradingsymbol = st.selectbox(
-            "Trading Symbol",
-            df_seg["TRADINGSYM"].tolist()
-        )
-
-        # LTP fetch once
+        df_seg = df_symbols[df_symbols["SEGMENT"]==exchange]
+        tradingsymbol = st.selectbox("Trading Symbol", df_seg["TRADINGSYM"].tolist())
         token = df_seg[df_seg["TRADINGSYM"]==tradingsymbol]["TOKEN"].values[0]
+
+        # Fetch LTP once for default price
+        if "price_input" not in st.session_state or st.session_state.get("symbol_selected") != tradingsymbol:
+            ltp_initial = client.get_quotes(exchange, token).get("ltp",0.0)
+            st.session_state["price_input"] = ltp_initial
+            st.session_state["symbol_selected"] = tradingsymbol
+
+        # Editable price (initially LTP)
+        price_input = st.number_input("Price (editable)", min_value=0.0, step=0.05, value=st.session_state["price_input"])
+
+        # Auto-refresh LTP in separate container
         ltp_container = st.empty()
-        price_input = ltp_container.number_input("Price (editable)", min_value=0.0, step=0.05, value=get_ltp(client, exchange, token))
-
-        st.markdown(f"**LTP:** {get_ltp(client, exchange, token)}")
-
-        # Cash & Margin
         try:
-            limits = client.api_get("/limits")
-            cash_avail = float(limits.get("cash",0))
-            st.info(f"💰 Cash Available: ₹{cash_avail:,.2f}")
+            ltp_live = client.get_quotes(exchange, token).get("ltp",0.0)
+            ltp_container.markdown(f"**Live LTP:** {ltp_live}")
         except:
-            st.warning("Unable to fetch limits")
+            ltp_container.markdown("**Live LTP:** --")
 
-        # Place by Quantity / Amount
-        place_by = st.radio("Place by", ["Quantity", "Amount"])
-        if place_by == "Quantity":
+        # Cash limits
+        limits = client.api_get("/limits")
+        cash_avail = float(limits.get("cash",0))
+        st.info(f"💰 Cash Available: ₹{cash_avail:,.2f}")
+
+        # Place by qty or amount
+        place_by = st.radio("Place by", ["Quantity","Amount"])
+        if place_by=="Quantity":
             quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
-            amount = quantity * price_input
+            amount = quantity*price_input
             st.metric("Amount", f"₹{amount:,.2f}")
         else:
             amount = st.number_input("Amount", min_value=0.0, step=0.05, value=0.0)
-            quantity = int(amount // price_input) if price_input > 0 else 0
+            quantity = int(amount // price_input) if price_input>0 else 0
             st.metric("Calculated Quantity", quantity)
 
-        order_type = st.radio("Order Type", ["BUY", "SELL"])
-        price_type = st.radio("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"])
-        product_type = st.radio("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=2)
+        order_type = st.radio("Order Type", ["BUY","SELL"])
+        price_type = st.radio("Price Type", ["MARKET","LIMIT","SL-LIMIT","SL-MARKET"])
+        product_type = st.radio("Product Type", ["CNC","INTRADAY","NORMAL"], index=2)
         trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
         validity = st.selectbox("Validity", ["DAY","IOC","EOS"], index=0)
         remarks = st.text_input("Remarks (optional)","")
+
+        # Get required margin
+        margin_required = 0.0
+        try:
+            basket = [{"exchange": exchange,"tradingsymbol": tradingsymbol,"quantity":str(quantity),
+                       "price":str(price_input),"product_type":product_type,"order_type":order_type,"price_type":price_type}]
+            margin_resp = client.api_post("/margin", {"basketlists":basket})
+            if margin_resp.get("status")=="SUCCESS":
+                margin_required = float(margin_resp.get("marginUsed",0))
+            st.info(f"📊 Required Margin: ₹{margin_required:,.2f}")
+            if margin_required>cash_avail:
+                st.warning("⚠️ Margin exceeds available cash!")
+        except:
+            st.warning("Unable to fetch required margin")
 
         submitted = st.form_submit_button("🚀 Place Order")
 
@@ -110,7 +113,7 @@ def show_place_order():
                 "price": str(price_input),
                 "validity": validity
             }
-            if trigger_price > 0:
+            if trigger_price>0:
                 payload["trigger_price"] = str(trigger_price)
             if remarks:
                 payload["remarks"] = remarks
