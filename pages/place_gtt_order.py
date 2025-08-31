@@ -2,7 +2,7 @@
 import streamlit as st
 import traceback
 
-def show():
+def show_place_gtt_order():
     st.header("📌 Place GTT Order — Definedge")
 
     client = st.session_state.get("client")
