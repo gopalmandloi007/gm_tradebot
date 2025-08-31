@@ -49,5 +49,5 @@ else:
         show_place_order()
     elif page == "GTT Order Book":
         show_gtt_orderbook()
-    elif page == "Place GTT Order()
+    elif page == "Place GTT Order"()
         
