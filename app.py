@@ -7,7 +7,7 @@ from pages.place_order import show as show_place_order
 from pages.gtt_orderbook import show as show_gtt_orderbook
 from pages.positions import show as show_positions
 from pages.place_gtt_order import show_place_gtt_order
-from pages.place_oco_order import show as show_place_oco_order
+from pages.place_oco_order import show_place_oco_order
 from pages.dashboard import show_dashboard
 
 # Import update_master script
