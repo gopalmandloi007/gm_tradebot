@@ -1,12 +1,15 @@
 import streamlit as st
 import requests
 
-def show_place_oco_order():   # ✅ function name correct
+def show_place_oco_order():
     st.title("🟢 Place OCO Order")
 
+    # Agar login nahi hai to rok do
     if "client" not in st.session_state:
         st.warning("⚠️ Please login first.")
         return
+
+    client = st.session_state["client"]   # ✅ Direct object use karo
 
     st.subheader("📋 Order Details")
 
@@ -23,11 +26,12 @@ def show_place_oco_order():   # ✅ function name correct
 
     st.markdown("---")
 
+    # ---- Button ----
     if st.button("🚀 Place OCO Order"):
         try:
-            url = st.session_state["client"]["base_url"] + "/ocoplaceorder"
+            url = client.base_url + "/ocoplaceorder"   # ✅ Object ka property
             headers = {
-                "Authorization": st.session_state["client"]["access_token"],
+                "Authorization": client.access_token,   # ✅ Object ka property
                 "Content-Type": "application/json"
             }
 
