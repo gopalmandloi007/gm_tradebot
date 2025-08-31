@@ -2,160 +2,126 @@
 import streamlit as st
 import pandas as pd
 import io
+import zipfile
 import requests
-from datetime import datetime
-import threading
 import time
 
-MASTER_ZIP_URL = "https://app.definedgesecurities.com/public/allmaster.zip"
+MASTER_URL = "https://app.definedgesecurities.com/public/allmaster.zip"
+MASTER_FILE = "data/master/allmaster.csv"
 
-# -------------------- Helper Functions --------------------
-def download_and_load_master():
-    """Download master zip and return dataframe."""
+# ---- Load or update master file ----
+def download_and_extract_master():
     try:
-        resp = requests.get(MASTER_ZIP_URL, timeout=30)
-        resp.raise_for_status()
-        from zipfile import ZipFile
-        from io import BytesIO
-
-        zipfile = ZipFile(BytesIO(resp.content))
-        # allmaster.csv should be inside zip
-        for name in zipfile.namelist():
-            if name.endswith(".csv"):
-                with zipfile.open(name) as f:
-                    df = pd.read_csv(f, header=None)
-                    df.columns = [
-                        "SEGMENT", "TOKEN", "SYMBOL", "TRADINGSYM", "INSTRUMENT_TYPE",
-                        "EXPIRY", "TICKSIZE", "LOTSIZE", "OPTIONTYPE", "STRIKE",
-                        "PRICEPREC", "MULTIPLIER", "ISIN", "PRICEMULT", "COMPANY"
-                    ]
-                    return df
+        r = requests.get(MASTER_URL)
+        r.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            # Assuming first CSV in zip is the master
+            csv_name = z.namelist()[0]
+            with z.open(csv_name) as f:
+                df = pd.read_csv(f, header=None)
+        df.columns = ["SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT","EXPIRY",
+                      "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER","ISIN","PRICEMULT","COMPANY"]
+        # Save locally
+        import os
+        os.makedirs("data/master", exist_ok=True)
+        df.to_csv(MASTER_FILE, index=False)
+        return df
     except Exception as e:
-        st.error(f"Failed to download/load master file: {e}")
+        st.error(f"Failed to download master file: {e}")
         return pd.DataFrame()
 
+def load_master_symbols():
+    try:
+        df = pd.read_csv(MASTER_FILE)
+        return df
+    except:
+        return download_and_extract_master()
+
+# ---- Fetch LTP ----
 def fetch_ltp(client, exchange, token):
-    """Fetch LTP for given symbol."""
     try:
-        resp = client.get_quotes(exchange, str(token))
-        return float(resp.get("ltp", 0.0))
+        quotes = client.get_quotes(exchange, str(token))
+        return float(quotes.get("ltp", 0.0))
     except:
         return 0.0
 
-def fetch_limits(client):
-    """Fetch available cash from /limits API."""
-    try:
-        resp = client.api_get("/limits")
-        cash = float(resp.get("cash", 0.0))
-        return cash
-    except:
-        return 0.0
-
-def fetch_margin(client, basket_list):
-    """Fetch required margin for order."""
-    try:
-        payload = {"basketlists": basket_list}
-        resp = client.api_post("/margin", payload)
-        total_margin = resp.get("newMarginUsedAfterTrade", 0.0)
-        margin_used = resp.get("marginUsed", 0.0)
-        # safe conversion
-        try:
-            total_margin = float(total_margin) if total_margin else 0.0
-        except:
-            total_margin = 0.0
-        try:
-            margin_used = float(margin_used) if margin_used else 0.0
-        except:
-            margin_used = 0.0
-        return total_margin, margin_used
-    except:
-        return 0.0, 0.0
-
-# -------------------- Main Function --------------------
+# ---- Place order page ----
 def show_place_order():
     st.header("🛒 Place Order — Definedge")
-    
+
     client = st.session_state.get("client")
     if not client:
-        st.error("⚠️ Not logged in. Please login first from the Login page.")
+        st.error("⚠️ Not logged in. Please login first from Login page.")
         return
 
-    # Download/load master
-    df_symbols = download_and_load_master()
-    if df_symbols.empty:
-        st.warning("Master file not loaded yet. Retry after some time.")
-        return
+    df_symbols = load_master_symbols()
 
-    # -------------------- Exchange Selection --------------------
+    # ---- Exchange selection ----
     exchange = st.radio("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=0)
 
-    # Filter symbols by exchange
+    # Filter master for selected exchange
     df_exch = df_symbols[df_symbols["SEGMENT"] == exchange]
-    trading_symbols = df_exch["TRADINGSYM"].tolist()
 
-    # -------------------- Symbol Selection --------------------
-    selected_symbol = st.selectbox("Trading Symbol", trading_symbols)
+    # ---- Trading Symbol selection ----
+    selected_symbol = st.selectbox(
+        "Trading Symbol",
+        df_exch["TRADINGSYM"].tolist()
+    )
 
     # Get token for LTP
     token_row = df_exch[df_exch["TRADINGSYM"] == selected_symbol]
-    token = token_row["TOKEN"].values[0] if not token_row.empty else None
+    token = int(token_row["TOKEN"].values[0]) if not token_row.empty else None
 
-    # -------------------- LTP Display --------------------
+    # ---- Initial LTP fetch (set price once) ----
+    initial_ltp = fetch_ltp(client, exchange, token) if token else 0.0
+    price_input = st.number_input("Price", min_value=0.0, step=0.05, value=initial_ltp)
+
+    # ---- LTP display container (auto-refresh) ----
     ltp_container = st.empty()
-    price_val = token_row["PRICEMULT"].values[0] if not token_row.empty else 0.0
-
-    def refresh_ltp():
-        while True:
-            if token:
-                ltp = fetch_ltp(client, exchange, token)
-                ltp_container.metric("LTP", f"{ltp:.2f}")
-            time.sleep(5)  # refresh every 5 seconds
-
-    threading.Thread(target=refresh_ltp, daemon=True).start()
-
-    # -------------------- Order Details --------------------
-    st.subheader("Order Details")
-    order_type = st.radio("Order Type", ["BUY", "SELL"], index=0)
-    price_type = st.radio("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"], index=0)
-    product_type = st.radio("Product Type", ["NORMAL", "CNC", "INTRADAY"], index=0)
-
-    place_by = st.radio("Place by", ["Quantity", "Amount"], index=0)
-    qty_val = st.number_input("Quantity", min_value=1, step=1, value=1)
-    amt_val = st.number_input("Amount", min_value=0.0, step=0.01, value=0.0)
-    price_input = st.number_input("Price", min_value=0.0, step=0.05, value=0.0)
-    trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
-    remarks = st.text_input("Remarks (optional)", "")
-
-    # -------------------- Cash & Margin --------------------
-    cash_available = fetch_limits(client)
     cash_container = st.empty()
+    margin_container = st.empty()
+
+    # ---- Fetch user limits ----
+    limits = client.api_get("/limits")
+    cash_available = float(limits.get("cash", 0.0))
     cash_container.info(f"💰 Cash Available: ₹{cash_available:,.2f}")
 
-    # Estimate required margin
-    basket_list = [{
-        "exchange": exchange,
-        "tradingsymbol": selected_symbol,
-        "quantity": qty_val,
-        "price": str(price_input if price_input > 0 else price_val),
-        "product_type": product_type,
-        "order_type": order_type,
-        "price_type": price_type,
-        "trigger_price": str(trigger_price) if trigger_price > 0 else None
-    }]
-    total_margin, margin_used = fetch_margin(client, basket_list)
-    margin_container = st.empty()
-    margin_container.info(f"📊 Required Margin: ₹{total_margin:,.2f}")
+    # ---- Order form ----
+    with st.form("place_order_form"):
+        st.subheader("Order Details")
+        order_type = st.radio("Order Type", ["BUY", "SELL"])
+        price_type = st.radio("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"])
+        product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=2)
+        place_by = st.radio("Place by", ["Quantity", "Amount"])
+        quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
+        amount = st.number_input("Amount", min_value=0.0, step=0.05, value=0.0)
+        trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
+        validity = st.selectbox("Validity", ["DAY", "IOC", "EOS"], index=0)
+        remarks = st.text_input("Remarks (optional)", "")
+        submitted = st.form_submit_button("🚀 Place Order")
 
-    # -------------------- Submit Button --------------------
-    if st.button("🚀 Place Order"):
+    # ---- Auto-refresh LTP ----
+    if token:
+        for i in range(1):  # only one refresh on page load, further can use while loop in async or callback
+            current_ltp = fetch_ltp(client, exchange, token)
+            ltp_container.metric("📈 LTP", f"{current_ltp:.2f}")
+            time.sleep(1)  # adjust interval if needed
+
+    # ---- Place order ----
+    if submitted:
+        # Determine quantity if placed by amount
+        if place_by == "Amount" and amount > 0 and initial_ltp > 0:
+            quantity = int(amount // initial_ltp)
+
         payload = {
             "exchange": exchange,
             "tradingsymbol": selected_symbol,
             "order_type": order_type,
-            "price": str(price_input if price_input > 0 else price_val),
+            "price": str(price_input),
             "price_type": price_type,
             "product_type": product_type,
-            "quantity": str(qty_val),
+            "quantity": str(quantity),
+            "validity": validity,
         }
         if trigger_price > 0:
             payload["trigger_price"] = str(trigger_price)
@@ -165,14 +131,12 @@ def show_place_order():
         st.write("📦 Sending payload:")
         st.json(payload)
 
-        try:
-            resp = client.place_order(payload)
-            st.write("📬 API Response:")
-            st.json(resp)
-            if resp.get("status") == "SUCCESS":
-                st.success(f"✅ Order placed successfully. Order ID: {resp.get('order_id')}")
-            else:
-                st.error(f"❌ Order placement failed. Response: {resp}")
-        except Exception as e:
-            st.error(f"Order placement failed: {e}")
-    
+        resp = client.place_order(payload)
+        st.write("📬 API Response:")
+        st.json(resp)
+
+        if resp.get("status") == "SUCCESS":
+            st.success(f"✅ Order placed successfully. Order ID: {resp.get('order_id')}")
+        else:
+            st.error(f"❌ Order placement failed. Response: {resp}")
+            
