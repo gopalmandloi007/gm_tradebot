@@ -7,7 +7,7 @@ from pages.login import show as show_login
 from pages.place_order import show as show_place_order
 from pages.gtt_orderbook import show as show_gtt_orderbook
 from pages.positions import show as show_positions   # ✅ Positions page import
-from pages.place_gtt_order import show as show_place_gtt_order
+from pages.place_gtt_order import show as show_place_gtt_order  # ✅ Place GTT Order page import
 
 # ---- Page config ----
 st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
@@ -19,7 +19,7 @@ page = st.sidebar.radio(
     [
         "Login",
         "Holdings",
-        "Positions",        # ✅ Now separate option
+        "Positions",        
         "Order Book",
         "Trades",
         "Place Order",
@@ -49,5 +49,6 @@ else:
         show_place_order()
     elif page == "GTT Order Book":
         show_gtt_orderbook()
-    elif page == "Place GTT Order"()
+    elif page == "Place GTT Order":   # ✅ Fixed syntax
+        show_place_gtt_order()
         
