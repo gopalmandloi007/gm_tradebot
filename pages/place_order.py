@@ -1,3 +1,4 @@
+# pages/place_order.py
 import streamlit as st
 import pandas as pd
 import io
@@ -44,13 +45,15 @@ def fetch_ltp(client, exchange, token):
     except:
         return 0.0
 
-# ---- Single page Place Order ----
-st.header("🛒 Place Order — Definedge")
+# ---- Place order page ----
+def show_place_order():
+    st.header("🛒 Place Order — Definedge")
 
-client = st.session_state.get("client")
-if not client:
-    st.error("⚠️ Not logged in. Please login first from Login page.")
-else:
+    client = st.session_state.get("client")
+    if not client:
+        st.error("⚠️ Not logged in. Please login first from Login page.")
+        return
+
     df_symbols = load_master_symbols()
 
     # ---- Exchange selection ----
