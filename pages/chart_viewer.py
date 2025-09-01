@@ -2,242 +2,280 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-import zipfile
-import requests
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-# ---- CONFIG ----
-MASTER_URL = "https://app.definedgesecurities.com/public/allmaster.zip"
-MASTER_FILE = "data/master/allmaster.csv"
-SEGMENTS = ["NSE", "BSE", "NFO", "MCX"]
+# --- Technical Indicator Helpers ---
 
-INDEX_TOKENS = {
-    "Nifty 50": "256265",
-    "Nifty 500": "999920005",
-    "Nifty MidSmall 400": "999920388"
-}
+def compute_rsi(data, window=14):
+    delta = data['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=window).mean()
+    avg_loss = loss.rolling(window=window).mean().replace(0, 1e-10)
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-def download_and_extract_master():
-    try:
-        r = requests.get(MASTER_URL)
-        r.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            csv_name = z.namelist()[0]
-            with z.open(csv_name) as f:
-                df = pd.read_csv(f, header=None)
-        df.columns = ["SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT","EXPIRY",
-                      "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER","ISIN","PRICEMULT","COMPANY"]
-        import os
-        os.makedirs("data/master", exist_ok=True)
-        df.to_csv(MASTER_FILE, index=False)
-        return df
-    except Exception as e:
-        st.error(f"Failed to download master file: {e}")
-        return pd.DataFrame()
+def compute_macd(data, slow=26, fast=12, signal=9):
+    ema_slow = data['Close'].ewm(span=slow, adjust=False).mean()
+    ema_fast = data['Close'].ewm(span=fast, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    return macd, signal_line
 
-def load_master_symbols():
-    try:
-        df = pd.read_csv(MASTER_FILE)
-        return df
-    except:
-        return download_and_extract_master()
+def minervini_sell_signals(df, lookback_days=15):
+    if len(df) < lookback_days:
+        return {"error": "Insufficient data for analysis"}
+    recent = df.tail(lookback_days).copy()
+    recent['change'] = recent['Close'].pct_change() * 100
+    recent['spread'] = recent['High'] - recent['Low']
+    signals = {
+        'up_days': 0,
+        'down_days': 0,
+        'up_day_percent': 0,
+        'largest_up_day': 0,
+        'largest_spread': 0,
+        'exhaustion_gap': False,
+        'high_volume_reversal': False,
+        'churning': False,
+        'heavy_volume_down': False,
+        'warnings': []
+    }
+    for i in range(1, len(recent)):
+        if recent['Close'].iloc[i] > recent['Close'].iloc[i-1]:
+            signals['up_days'] += 1
+        elif recent['Close'].iloc[i] < recent['Close'].iloc[i-1]:
+            signals['down_days'] += 1
+    signals['up_day_percent'] = (signals['up_days'] / lookback_days) * 100
+    signals['largest_up_day'] = recent['change'].max()
+    signals['largest_spread'] = recent['spread'].max()
+    recent['gap_up'] = recent['Open'] > recent['High'].shift(1)
+    recent['gap_down'] = recent['Open'] < recent['Low'].shift(1)
+    recent['gap_filled'] = False
+    for i in range(1, len(recent)):
+        if recent['gap_up'].iloc[i]:
+            if recent['Low'].iloc[i] <= recent['High'].shift(1).iloc[i]:
+                recent.at[recent.index[i], 'gap_filled'] = True
+                signals['exhaustion_gap'] = True
+    avg_volume = recent['Volume'].mean()
+    for i in range(1, len(recent)):
+        if recent['Volume'].iloc[i] > avg_volume * 1.5:
+            range_ = recent['High'].iloc[i] - recent['Low'].iloc[i]
+            if (recent['High'].iloc[i] > recent['High'].iloc[i-1] and
+                (recent['Close'].iloc[i] - recent['Low'].iloc[i]) < range_ * 0.25):
+                signals['high_volume_reversal'] = True
+                break
+    if recent['Volume'].iloc[-1] > avg_volume * 1.8:
+        price_change = abs(recent['Close'].iloc[-1] - recent['Open'].iloc[-1])
+        if price_change < recent['spread'].iloc[-1] * 0.15:
+            signals['churning'] = True
+    if recent['Volume'].iloc[-1] > avg_volume * 1.5 and recent['change'].iloc[-1] < -3:
+        signals['heavy_volume_down'] = True
+    if signals['up_day_percent'] >= 70:
+        signals['warnings'].append(
+            f"⚠️ {signals['up_day_percent']:.0f}% up days ({signals['up_days']}/{lookback_days}) - "
+            "Consider selling into strength"
+        )
+    if signals['largest_up_day'] > 5:
+        signals['warnings'].append(
+            f"⚠️ Largest up day: {signals['largest_up_day']:.2f}% - "
+            "Potential climax run"
+        )
+    if signals['exhaustion_gap']:
+        signals['warnings'].append("⚠️ Exhaustion gap detected - Potential reversal signal")
+    if signals['high_volume_reversal']:
+        signals['warnings'].append("⚠️ High-volume reversal - Institutional selling")
+    if signals['churning']:
+        signals['warnings'].append("⚠️ Churning detected (high volume, low progress) - Distribution likely")
+    if signals['heavy_volume_down']:
+        signals['warnings'].append("⚠️ Heavy volume down day - Consider exiting position")
+    return signals
 
-def fetch_historical(client, segment, token, days):
-    today = datetime.today()
-    from_date = (today - timedelta(days=days*2)).strftime("%d%m%Y%H%M")
-    to_date = today.strftime("%d%m%Y%H%M")
-    hist_csv = client.historical_csv(segment=segment, token=token, timeframe="day", frm=from_date, to=to_date)
-    if not hist_csv.strip():
-        raise Exception("No data returned from broker for this symbol.")
-    hist_df = pd.read_csv(io.StringIO(hist_csv), header=None)
-    if hist_df.shape[1] == 7:
-        hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume", "OI"]
-    elif hist_df.shape[1] == 6:
-        hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume"]
+def minervini_high_vs_ema20_interpretation(high, ema20):
+    if not isinstance(ema20, (int, float, np.floating)) or ema20 == 0 or pd.isnull(high) or pd.isnull(ema20):
+        return "", ""
+    diff_pct = ((high - ema20) / ema20) * 100
+    diff_pct_rounded = round(diff_pct, 2)
+    if diff_pct >= 50:
+        interp = "🚨 Immediate Sell: High is 50%+ above 20 EMA"
+    elif diff_pct >= 40:
+        interp = "⚠️ Ready to Sell: High is 40%+ above 20 EMA"
+    elif diff_pct >= 20:
+        interp = "⚠️ Caution: High is 20%+ above 20 EMA"
     else:
-        raise Exception(f"Unexpected columns in historical data: {hist_df.shape[1]}")
-    hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
-    hist_df = hist_df.sort_values("DateTime")
-    hist_df = hist_df.drop_duplicates(subset=["DateTime"])
-    hist_df = hist_df.tail(days)
-    hist_df = hist_df.reset_index(drop=True)
-    return hist_df
+        interp = "✅ Healthy: High is within reasonable range of 20 EMA"
+    return diff_pct_rounded, interp
 
-def fetch_current_candle(client, exchange, token):
-    try:
-        q = client.get_quotes(exchange, str(token))
-        o = float(q.get("day_open", np.nan))
-        h = float(q.get("day_high", np.nan))
-        l = float(q.get("day_low", np.nan))
-        c = float(q.get("ltp", np.nan))
-        v = float(q.get("volume", np.nan))
-        dt = datetime.now().replace(hour=15, minute=30, second=0, microsecond=0)  # EOD
-        return {"DateTime": dt, "Open": o, "High": h, "Low": l, "Close": c, "Volume": v}
-    except Exception as e:
-        return None
+# --- Streamlit UI & Client Data ---
 
-def calc_ema(df, period):
-    return df['Close'].ewm(span=period, adjust=False).mean()
-
-def calc_vol_sma(df, period):
-    return df["Volume"].rolling(window=period).mean()
-
-def fetch_benchmark(client, token, days):
-    try:
-        return fetch_historical(client, "NSE", token, days)
-    except:
-        return None
-
-def calc_relative_strength(main_df, bench_df):
-    merged = pd.merge(main_df[["DateTime", "Close"]], bench_df[["DateTime", "Close"]],
-                      on="DateTime", suffixes=('', '_bench'))
-    if len(merged) < 5:
-        return None, None
-    rs = merged["Close"] / merged["Close_bench"]
-    rs = rs / rs.iloc[0]
-    return merged["DateTime"], rs
-
-st.markdown(
-    "<h1 style='text-align:center; color:#2D9CDB;'>📈 Chart Viewer</h1>",
-    unsafe_allow_html=True)
+st.title("📈 Chart Viewer")
 
 client = st.session_state.get("client")
 if not client:
     st.error("⚠️ Not logged in. Please login first from the Login page.")
     st.stop()
 
-df_symbols = load_master_symbols()
-segment = st.selectbox("Exchange/Segment", SEGMENTS, index=0)
-df_exch = df_symbols[df_symbols["SEGMENT"] == segment]
-selected_symbol = st.selectbox("Trading Symbol", df_exch["TRADINGSYM"].tolist())
-token_row = df_exch[df_exch["TRADINGSYM"] == selected_symbol]
-token = int(token_row["TOKEN"].values[0]) if not token_row.empty else None
+# User inputs for symbol selection
+segment = st.selectbox("Exchange/Segment", ["NSE", "NFO", "BSE", "MCX"])
+token = st.text_input("Instrument Token", value="256265")  # Default Nifty 50
+days_back = st.slider("How many candles (days)?", min_value=20, max_value=250, value=70, step=1)
 
-days = st.number_input("How many candles (days)?", min_value=20, max_value=250, value=70, step=1)
-
-st.markdown("##### Overlay EMAs:")
-col1, col2, col3, col4 = st.columns(4)
-ema20 = col1.toggle("EMA 20", value=True)
-ema50 = col2.toggle("EMA 50", value=False)
-ema100 = col3.toggle("EMA 100", value=False)
-ema200 = col4.toggle("EMA 200", value=False)
-ema_periods = []
-if ema20: ema_periods.append(20)
-if ema50: ema_periods.append(50)
-if ema100: ema_periods.append(100)
-if ema200: ema_periods.append(200)
-
-st.markdown("##### Volume & Volume SMA (20):")
-show_volume = st.toggle("Show Volume", value=True)
-show_volsma = st.toggle("Show Volume SMA 20", value=True)
-
-st.markdown("##### Relative Strength:")
-rs_bench = st.selectbox("Overlay RS against", ["None"] + list(INDEX_TOKENS.keys()), index=0)
-
-if token:
+if st.button("Show Chart"):
     try:
-        # 1. Fetch Historical Data
-        hist_df = fetch_historical(client, segment, token, days)
-        current = fetch_current_candle(client, segment, token)
-        # Add current candle if not already present
-        if current is not None:
-            last_hist_date = hist_df.iloc[-1]["DateTime"].date() if not hist_df.empty else None
-            if current["DateTime"].date() != last_hist_date:
-                hist_df = pd.concat([hist_df, pd.DataFrame([current])], ignore_index=True)
-        hist_df = hist_df.sort_values("DateTime").reset_index(drop=True)
-
-        # 2. Calculate EMAs
-        ema_lines = {}
-        for p in ema_periods:
-            ema_lines[p] = calc_ema(hist_df, p)
-
-        # 3. Main Chart: Candlestick + EMA's
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(
-            x=hist_df["DateTime"],
-            open=hist_df["Open"],
-            high=hist_df["High"],
-            low=hist_df["Low"],
-            close=hist_df["Close"],
-            name="Price",
-            increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
-            showlegend=False
-        ))
-        colors = {20: "#1976d2", 50: "#d32f2f", 100: "#f57c00", 200: "#388e3c"}
-        for p, ema in ema_lines.items():
-            fig.add_trace(go.Scatter(
-                x=hist_df["DateTime"], y=ema,
-                name=f"EMA {p}", mode="lines", line=dict(width=2, color=colors.get(p, None)),
-                showlegend=True
-            ))
-        fig.update_layout(
-            template="plotly_dark",
-            margin=dict(l=10,r=10,t=40,b=10),
-            height=500,
-            xaxis=dict(type="category", showgrid=False, tickfont=dict(size=12)),
-            yaxis=dict(title="Price", showgrid=True, gridcolor="#444"),
-            showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # 4. Volume chart below
-        if show_volume or show_volsma:
-            fig_vol = go.Figure()
-            if show_volume:
-                fig_vol.add_trace(go.Scatter(
-                    x=hist_df["DateTime"], y=hist_df["Volume"],
-                    name="Volume",
-                    mode="lines", line=dict(width=1, color="#bdbdbd")
-                ))
-            if show_volsma:
-                volsma = calc_vol_sma(hist_df, 20)
-                fig_vol.add_trace(go.Scatter(
-                    x=hist_df["DateTime"], y=volsma,
-                    name="Volume SMA 20",
-                    mode="lines", line=dict(width=2, color="#1976d2", dash='dot')
-                ))
-            fig_vol.update_layout(
-                template="plotly_dark",
-                title="Volume",
-                margin=dict(l=10,r=10,t=40,b=10),
-                height=200,
-                xaxis=dict(type="category", showgrid=False, tickfont=dict(size=12)),
-                yaxis=dict(title="Volume", showgrid=True, gridcolor="#444"),
-                showlegend=True,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            st.plotly_chart(fig_vol, use_container_width=True)
-
-        # 5. Relative Strength chart below
-        if rs_bench != "None":
-            bench_token = INDEX_TOKENS.get(rs_bench)
-            bench_df = fetch_benchmark(client, bench_token, days)
-            if bench_df is not None:
-                rs_x, rs_y = calc_relative_strength(hist_df, bench_df)
-                if rs_x is not None:
-                    fig_rs = go.Figure()
-                    fig_rs.add_trace(go.Scatter(
-                        x=rs_x, y=rs_y,
-                        mode='lines', name=f"RS vs {rs_bench}",
-                        line=dict(width=2, color="#F9A825")
-                    ))
-                    fig_rs.update_layout(
-                        template="plotly_dark",
-                        title=f"Relative Strength vs {rs_bench}",
-                        margin=dict(l=10,r=10,t=40,b=10),
-                        height=200,
-                        xaxis=dict(type="category", showgrid=False, tickfont=dict(size=12)),
-                        yaxis=dict(title="RS (Normalized)", showgrid=True, gridcolor="#444"),
-                        showlegend=False,
-                    )
-                    st.plotly_chart(fig_rs, use_container_width=True)
-                else:
-                    st.info("Not enough data for Relative Strength calculation.")
+        # --- Fetch data using your client-based method ---
+        def fetch_historical(client, segment, token, days):
+            today = datetime.today()
+            from_date = (today - timedelta(days=days*2)).strftime("%d%m%Y%H%M")
+            to_date = today.strftime("%d%m%Y%H%M")
+            hist_csv = client.historical_csv(segment=segment, token=token, timeframe="day", frm=from_date, to=to_date)
+            if not hist_csv.strip():
+                raise Exception("No data returned from broker for this symbol.")
+            hist_df = pd.read_csv(io.StringIO(hist_csv), header=None)
+            if hist_df.shape[1] == 7:
+                hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume", "OI"]
+            elif hist_df.shape[1] == 6:
+                hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume"]
             else:
-                st.info("Benchmark data not found.")
+                raise Exception(f"Unexpected columns in historical data: {hist_df.shape[1]}")
+            hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
+            hist_df = hist_df.sort_values("DateTime")
+            hist_df = hist_df.drop_duplicates(subset=["DateTime"])
+            hist_df = hist_df.tail(days)
+            hist_df = hist_df.reset_index(drop=True)
+            return hist_df
 
+        df = fetch_historical(client, segment, token, days_back)
+        if df.empty:
+            st.error("No data returned for selected symbol.")
+        else:
+            df = df.sort_values("DateTime")
+            df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+            df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
+            df['RSI'] = compute_rsi(df)
+            macd, signal = compute_macd(df)
+            df['MACD'] = macd
+            df['Signal'] = signal
+
+            show_ema = st.checkbox("Show EMAs", value=True)
+            show_rsi = st.checkbox("Show RSI", value=True)
+            show_macd = st.checkbox("Show MACD", value=True)
+
+            rows_chart = 1 + int(show_rsi) + int(show_macd)
+            specs = [[{"secondary_y": True}]] + [[{}]] * (rows_chart - 1)
+            row_heights = [0.6] + [0.2] * (rows_chart - 1)
+            fig = make_subplots(
+                rows=rows_chart, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.05,
+                row_heights=row_heights,
+                specs=specs
+            )
+
+            # Candlestick
+            fig.add_trace(
+                go.Candlestick(
+                    x=df["DateTime"].dt.strftime('%Y-%m-%d'),
+                    open=df["Open"],
+                    high=df["High"],
+                    low=df["Low"],
+                    close=df["Close"],
+                    name="Price"
+                ),
+                row=1, col=1
+            )
+            if show_ema:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df["DateTime"].dt.strftime('%Y-%m-%d'),
+                        y=df["EMA20"],
+                        mode="lines",
+                        name="20 EMA",
+                        line=dict(color="blue", width=1.5)
+                    ),
+                    row=1, col=1
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=df["DateTime"].dt.strftime('%Y-%m-%d'),
+                        y=df["EMA50"],
+                        mode="lines",
+                        name="50 EMA",
+                        line=dict(color="orange", width=1.5)
+                    ),
+                    row=1, col=1
+                )
+            if show_rsi:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df["DateTime"].dt.strftime('%Y-%m-%d'),
+                        y=df["RSI"],
+                        mode="lines",
+                        name="RSI",
+                        line=dict(color="purple", width=1.5)
+                    ),
+                    row=2, col=1 if rows_chart > 1 else 1
+                )
+                fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+            if show_macd:
+                row_macd = rows_chart if show_macd else 2
+                fig.add_trace(
+                    go.Bar(
+                        x=df["DateTime"].dt.strftime('%Y-%m-%d'),
+                        y=df["MACD"],
+                        name="MACD",
+                        marker_color=np.where(df['MACD'] > 0, 'green', 'red')
+                    ),
+                    row=row_macd, col=1
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=df["DateTime"].dt.strftime('%Y-%m-%d'),
+                        y=df["Signal"],
+                        mode="lines",
+                        name="Signal",
+                        line=dict(color="blue", width=1.5)
+                    ),
+                    row=row_macd, col=1
+                )
+            fig.update_layout(
+                height=600,
+                title=f"{segment}:{token} Technical Analysis",
+                showlegend=True,
+                xaxis=dict(type="category"),
+                xaxis_rangeslider_visible=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Minervini signals
+            minervini_lookback = st.slider("Analysis Lookback (days)", 7, 30, 15, key="minervini_lookback")
+            signals = minervini_sell_signals(df, minervini_lookback)
+            if signals.get('error'):
+                st.warning(signals['error'])
+            else:
+                st.markdown(f"#### Minervini Sell Signals Analysis")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Up Days", f"{signals['up_days']}/{minervini_lookback}")
+                col2.metric("Up Day %", f"{signals['up_day_percent']:.1f}%")
+                col3.metric("Largest Up Day", f"{signals['largest_up_day']:.2f}%")
+                col4, col5, col6 = st.columns(3)
+                col4.metric("Largest Spread", f"₹{signals['largest_spread']:.2f}")
+                col5.metric("Exhaustion Gap", "Yes" if signals['exhaustion_gap'] else "No")
+                col6.metric("Volume Reversal", "Yes" if signals['high_volume_reversal'] else "No")
+                latest = df.iloc[-1]
+                ema20 = latest['EMA20']
+                high = latest['High']
+                diff_pct, high_interp = minervini_high_vs_ema20_interpretation(high, ema20)
+                col7, col8 = st.columns(2)
+                col7.metric("Current High vs 20 EMA", f"{diff_pct:+.2f}%")
+                col8.markdown(f"**{high_interp}**")
+                if signals['warnings']:
+                    st.error(f"🚨 Sell Signals Detected")
+                    for warning in signals['warnings']:
+                        st.write(f"- {warning}")
+                else:
+                    st.success("No strong sell signals detected")
     except Exception as e:
-        st.error(f"Failed to fetch or display chart: {e}")
-        st.info("Please ensure symbol has valid history and try again.")
+        st.error(f"Error fetching chart data: {e}")
