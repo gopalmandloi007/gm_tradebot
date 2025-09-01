@@ -91,7 +91,7 @@ def show_place_order():
         st.subheader("Order Details")
         order_type = st.radio("Order Type", ["BUY", "SELL"])
         price_type = st.radio("Price Type", ["LIMIT", "MARKET", "SL-LIMIT", "SL-MARKET"])
-        product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=2)
+        product_type = st.selectbox("Product Type", ["NORMAL", "INTRADAY", "CNC"], index=2)
         place_by = st.radio("Place by", ["Quantity", "Amount"])
         quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
         amount = st.number_input("Amount", min_value=0.0, step=0.05, value=0.0)
