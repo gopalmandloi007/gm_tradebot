@@ -4,13 +4,11 @@ import pandas as pd
 import io
 import zipfile
 import requests
-import time
 import os
 
 MASTER_URL = "https://app.definedgesecurities.com/public/allmaster.zip"
 MASTER_FILE = "data/master/allmaster.csv"
 
-# ---- Load or update master file ----
 def download_and_extract_master():
     try:
         r = requests.get(MASTER_URL)
@@ -37,7 +35,6 @@ def load_master_symbols():
     except:
         return download_and_extract_master()
 
-# ---- Fetch LTP ----
 def fetch_ltp(client, exchange, token):
     try:
         quotes = client.get_quotes(exchange, str(token))
@@ -45,7 +42,6 @@ def fetch_ltp(client, exchange, token):
     except:
         return 0.0
 
-# ---- Place order page ----
 def show_place_order():
     st.header("🛒 Place Order — Definedge")
 
@@ -55,30 +51,20 @@ def show_place_order():
         return
 
     df_symbols = load_master_symbols()
-
-    # ---- Exchange selection ----
     exchange = st.radio("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=0)
-
-    # Filter master for selected exchange
     df_exch = df_symbols[df_symbols["SEGMENT"] == exchange]
 
-    # ---- Trading Symbol selection ----
     selected_symbol = st.selectbox("Trading Symbol", df_exch["TRADINGSYM"].tolist())
-
-    # Get token for LTP
     token_row = df_exch[df_exch["TRADINGSYM"] == selected_symbol]
     token = int(token_row["TOKEN"].values[0]) if not token_row.empty else None
 
-    # ---- Initial LTP ----
     initial_ltp = fetch_ltp(client, exchange, token) if token else 0.0
     price_input = st.number_input("Price", min_value=0.0, step=0.05, value=initial_ltp)
 
-    # ---- User Limits ----
     limits = client.api_get("/limits")
     cash_available = float(limits.get("cash", 0.0))
     st.info(f"💰 Cash Available: ₹{cash_available:,.2f}")
 
-    # ---- Order form ----
     with st.form("place_order_form"):
         st.subheader("Order Details")
         order_type = st.radio("Order Type", ["BUY", "SELL"])
@@ -88,13 +74,11 @@ def show_place_order():
         trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
         validity = st.selectbox("Validity", ["DAY", "IOC", "EOS"], index=0)
         remarks = st.text_input("Remarks (optional)", "")
-        submitted = st.form_submit_button("🚀 Place Order")
+        submitted = st.form_submit_button("🚀 Submit Order")
 
-    # ---- Confirmation step ----
     if submitted:
         est_amount = price_input * quantity
-
-        st.warning("⚠️ Please confirm your order before final submission:")
+        st.warning("⚠️ Please confirm your order:")
         st.write(f"**Symbol:** {selected_symbol}")
         st.write(f"**Order Type:** {order_type}")
         st.write(f"**Price Type:** {price_type}")
@@ -127,11 +111,8 @@ def show_place_order():
             if remarks:
                 payload["remarks"] = remarks
 
-            st.write("📦 Sending payload:")
             st.json(payload)
-
             resp = client.place_order(payload)
-            st.write("📬 API Response:")
             st.json(resp)
 
             if resp.get("status") == "SUCCESS":
@@ -140,4 +121,4 @@ def show_place_order():
                 st.error(f"❌ Order placement failed. Response: {resp}")
 
         elif cancel:
-            st.info("❎ Order cancelled. You can modify and submit again.")
+            st.info("❎ Order cancelled. Modify and resubmit if needed.")
