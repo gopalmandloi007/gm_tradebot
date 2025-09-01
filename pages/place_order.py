@@ -16,7 +16,6 @@ def download_and_extract_master():
         r = requests.get(MASTER_URL)
         r.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            # Assuming first CSV in zip is the master
             csv_name = z.namelist()[0]
             with z.open(csv_name) as f:
                 df = pd.read_csv(f, header=None)
@@ -75,9 +74,8 @@ def show_place_order():
     initial_ltp = fetch_ltp(client, exchange, token) if token else 0.0
     price_input = st.number_input("Price", min_value=0.0, step=0.05, value=initial_ltp)
 
-    # ---- LTP display ----
-    ltp_container = st.empty()
-    ltp_container.metric("📈 LTP", f"{initial_ltp:.2f}")
+    # ---- Show LTP ----
+    st.metric("📈 LTP", f"{initial_ltp:.2f}")
 
     # ---- Fetch user limits ----
     limits = client.api_get("/limits")
@@ -93,8 +91,10 @@ def show_place_order():
         price_type = st.radio("Price Type", ["LIMIT", "MARKET", "SL-LIMIT", "SL-MARKET"], index=0)
         product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=2)
 
-        # ✅ Place by selection
         place_by = st.radio("Place by", ["Quantity", "Amount"], index=0)
+
+        # Default values
+        quantity, amount = 0, 0.0
 
         if place_by == "Quantity":
             quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
