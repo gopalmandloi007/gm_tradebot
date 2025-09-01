@@ -1,12 +1,55 @@
-# pages/dashboard.py
 import streamlit as st
 import pandas as pd
 import io
 from datetime import datetime, timedelta
-import plotly.express as px
 import plotly.graph_objects as go
 
 DEFAULT_TOTAL_CAPITAL = 1400000  # Default capital for % allocation
+
+def get_prev_close_from_hist(hist_df):
+    """
+    Get the most recent previous close from historical data,
+    robust to holidays/weekends.
+    """
+    # Ensure DataFrame is sorted by datetime ascending
+    hist_df = hist_df.sort_values("DateTime")
+    # Today's date (date only, not datetime)
+    today_date = datetime.now().date()
+
+    # Get all unique dates in the historical data
+    unique_dates = hist_df["DateTime"].dt.date.unique()
+    if len(unique_dates) < 2:
+        # Not enough data, fallback to latest close
+        return float(hist_df.iloc[-1]["Close"])
+
+    # Find the latest session (most recent trading day <= today)
+    latest_trading_day = None
+    for d in reversed(unique_dates):
+        if d <= today_date:
+            latest_trading_day = d
+            break
+
+    if latest_trading_day is None:
+        # Fallback: use latest close
+        return float(hist_df.iloc[-1]["Close"])
+
+    # Find the previous trading day
+    prev_trading_day = None
+    for d in reversed(unique_dates):
+        if d < latest_trading_day:
+            prev_trading_day = d
+            break
+
+    if prev_trading_day is None:
+        # Fallback: use earliest close
+        return float(hist_df.iloc[0]["Close"])
+
+    # Get the close value for the previous trading day
+    prev_close_row = hist_df[hist_df["DateTime"].dt.date == prev_trading_day]
+    if not prev_close_row.empty:
+        return float(prev_close_row.iloc[-1]["Close"])
+    else:
+        return float(hist_df.iloc[0]["Close"])
 
 def show_dashboard():
     st.header("📊 Trading Dashboard — Definedge")
@@ -65,8 +108,8 @@ def show_dashboard():
             ltp = float(quote_resp.get("ltp", 0))
             ltp_list.append(ltp)
 
-            # Get previous close from historical (skip weekends/holidays)
-            from_date = (today - timedelta(days=10)).strftime("%d%m%Y%H%M")
+            # Get previous close robustly from historical data (skip weekends/holidays)
+            from_date = (today - timedelta(days=20)).strftime("%d%m%Y%H%M")
             to_date = today.strftime("%d%m%Y%H%M")
             hist_csv = client.historical_csv(segment="NSE", token=token, timeframe="day", frm=from_date, to=to_date)
             hist_df = pd.read_csv(io.StringIO(hist_csv), header=None)
@@ -78,10 +121,11 @@ def show_dashboard():
                 hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume"]
             else:
                 st.warning(f"Unexpected columns in historical for {row['symbol']}: {hist_df.shape[1]}")
+                prev_close_list.append(ltp)
+                continue
 
             hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
-            hist_df = hist_df.sort_values("DateTime")
-            prev_close = hist_df.iloc[-2]["Close"] if len(hist_df) >= 2 else hist_df.iloc[-1]["Close"]
+            prev_close = get_prev_close_from_hist(hist_df)
             prev_close_list.append(float(prev_close))
 
         df["ltp"] = ltp_list
@@ -129,7 +173,7 @@ def show_dashboard():
         selected_symbol = st.selectbox("Select Symbol for Chart", df["symbol"].tolist())
         token = df[df["symbol"] == selected_symbol]["token"].values[0]
 
-        # Fetch historical CSV for chart (last 100 days)
+        # Fetch historical CSV for chart (last 120 days)
         from_date = (today - timedelta(days=120)).strftime("%d%m%Y%H%M")
         to_date = today.strftime("%d%m%Y%H%M")
         hist_csv = client.historical_csv(segment="NSE", token=token, timeframe="day", frm=from_date, to=to_date)
@@ -165,4 +209,3 @@ def show_dashboard():
     except Exception as e:
         st.error(f"⚠️ Dashboard fetch failed: {e}")
         st.text(e)
-        
