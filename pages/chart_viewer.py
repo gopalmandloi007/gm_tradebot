@@ -16,7 +16,6 @@ def select_symbol(df, label="Trading Symbol"):
     return row
 
 def select_index_symbol(df, label="Index Symbol"):
-    # Filter by common index names or instrument
     index_candidates = df[
         df["INSTRUMENT"].str.contains("INDEX", case=False, na=False) |
         df["TRADINGSYM"].str.contains("NIFTY|IDX|SENSEX|BANKNIFTY|MIDSMALL|500|100", case=False, na=False)
@@ -45,11 +44,13 @@ def fetch_historical(client, segment, token, days):
     hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"].astype(str), format="%d%m%Y%H%M", errors="coerce")
     hist_df = hist_df.sort_values("DateTime")
     hist_df = hist_df.drop_duplicates(subset=["DateTime"])
-    hist_df = hist_df.tail(days)
     hist_df = hist_df.reset_index(drop=True)
     return hist_df
 
-st.title("📈 Relative Strength Chart")
+def ema(series, period):
+    return series.ewm(span=period, adjust=False).mean()
+
+st.title("📈 Candlestick, EMAs, and Relative Strength Chart")
 
 client = st.session_state.get("client")
 if not client:
@@ -57,23 +58,24 @@ if not client:
     st.stop()
 
 df_master = load_master_symbols()
-
-# Exchange filter
 segment = st.selectbox("Exchange/Segment", sorted(df_master["SEGMENT"].unique()), index=0)
 segment_df = df_master[df_master["SEGMENT"] == segment]
 
 # Symbol selection
-st.markdown("#### Select Stock Symbol")
 stock_row = select_symbol(segment_df, label="Stock Trading Symbol")
 
 # Index selection
-st.markdown("#### Select Index or Benchmark Symbol")
 index_row = select_index_symbol(df_master, label="Index Trading Symbol")
 
-days_back = st.number_input("Number of Days (candles)", min_value=20, max_value=250, value=55, step=1)
-sma_period = st.number_input("RS SMA Period", min_value=2, max_value=55, value=20, step=1)
+# EMA period selection
+st.markdown("#### EMA Periods")
+ema_periods = st.text_input("Enter EMA periods (comma separated)", value="10,20,50,100,200")
+ema_periods = [int(x.strip()) for x in ema_periods.split(",") if x.strip().isdigit()]
 
-if st.button("Show Relative Strength Chart"):
+days_back = st.number_input("Number of Days (candles to fetch)", min_value=20, max_value=600, value=250, step=1)
+rs_sma_period = st.number_input("RS SMA Period", min_value=2, max_value=55, value=20, step=1)
+
+if st.button("Show Chart"):
     try:
         df_stock = fetch_historical(client, stock_row["SEGMENT"], stock_row["TOKEN"], days_back)
         if df_stock.empty:
@@ -85,54 +87,115 @@ if st.button("Show Relative Strength Chart"):
             st.warning(f"No data for index: {index_row['TRADINGSYM']} ({index_row['TOKEN']}, {index_row['SEGMENT']})")
             st.stop()
 
-        # Align and calculate RS
-        df_stock = df_stock[["DateTime", "Close"]].rename(columns={"Close": "StockClose"})
-        df_index = df_index[["DateTime", "Close"]].rename(columns={"Close": "IndexClose"})
-        df_merged = pd.merge(df_stock, df_index, on="DateTime", how="inner")
-        df_merged = df_merged.sort_values("DateTime").reset_index(drop=True)
-        if df_merged.empty:
-            st.warning("No overlapping dates between stock and index data.")
-            st.stop()
+        # Calculate EMAs
+        for period in ema_periods:
+            df_stock[f"EMA_{period}"] = ema(df_stock["Close"], period)
 
-        df_merged["RS"] = (df_merged["StockClose"] / df_merged["IndexClose"]) * 100
-        df_merged["RS_SMA"] = df_merged["RS"].rolling(window=sma_period).mean()
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_merged["DateTime"], y=df_merged["RS"],
-            mode="lines", name="Relative Strength",
-            line=dict(color="#1976d2", width=2)
+        # Candlestick Chart with EMAs
+        fig1 = go.Figure()
+        fig1.add_trace(go.Candlestick(
+            x=df_stock["DateTime"],
+            open=df_stock["Open"],
+            high=df_stock["High"],
+            low=df_stock["Low"],
+            close=df_stock["Close"],
+            name="OHLC",
+            increasing_line_color='green',
+            decreasing_line_color='red'
         ))
-        fig.add_trace(go.Scatter(
-            x=df_merged["DateTime"], y=df_merged["RS_SMA"],
-            mode="lines", name=f"RS SMA {sma_period}",
-            line=dict(color="#d32f2f", width=2, dash='dash')
+        for period in ema_periods:
+            fig1.add_trace(go.Scatter(
+                x=df_stock["DateTime"], y=df_stock[f"EMA_{period}"],
+                mode="lines", name=f"EMA {period}",
+                line=dict(width=1.5)
+            ))
+        fig1.add_trace(go.Bar(
+            x=df_stock["DateTime"],
+            y=df_stock["Volume"],
+            name="Volume",
+            marker=dict(color="#636EFA"),
+            opacity=0.3,
+            yaxis='y2'
         ))
-        fig.update_layout(
-            title=f"Relative Strength: {stock_row['TRADINGSYM']} vs {index_row['TRADINGSYM']}",
-            xaxis_title="Date",
-            yaxis_title="Relative Strength",
+        fig1.update_layout(
+            title=f"{stock_row['TRADINGSYM']} Candlestick Chart with EMAs",
+            xaxis=dict(title="Date", rangeslider=dict(visible=False)),
+            yaxis=dict(title="Price"),
+            yaxis2=dict(
+                title="Volume",
+                overlaying='y',
+                side='right',
+                showgrid=False,
+                position=1.0
+            ),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            height=500,
+            height=700,
             template="plotly_white",
             margin=dict(l=10, r=10, t=40, b=10)
         )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Show data table and download button
-        st.markdown("#### Download Relative Strength Data")
-        display_cols = ["DateTime", "StockClose", "IndexClose", "RS", "RS_SMA"]
-        st.dataframe(df_merged[display_cols], use_container_width=True)
-        csv = df_merged[display_cols].to_csv(index=False).encode('utf-8')
+        st.plotly_chart(fig1, use_container_width=True)
+
+        # --- Relative Strength Section ---
+        df_stock_rs = df_stock[["DateTime", "Close"]].rename(columns={"Close": "StockClose"})
+        df_index_rs = df_index[["DateTime", "Close"]].rename(columns={"Close": "IndexClose"})
+        df_rs = pd.merge(df_stock_rs, df_index_rs, on="DateTime", how="inner")
+        df_rs = df_rs.sort_values("DateTime").reset_index(drop=True)
+        if df_rs.empty:
+            st.warning("No overlapping dates between stock and index data for RS chart.")
+        else:
+            df_rs["RS"] = (df_rs["StockClose"] / df_rs["IndexClose"]) * 100
+            df_rs["RS_SMA"] = df_rs["RS"].rolling(window=rs_sma_period).mean()
+
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(
+                x=df_rs["DateTime"], y=df_rs["RS"],
+                mode="lines", name="Relative Strength",
+                line=dict(color="#1976d2", width=2)
+            ))
+            fig2.add_trace(go.Scatter(
+                x=df_rs["DateTime"], y=df_rs["RS_SMA"],
+                mode="lines", name=f"RS SMA {rs_sma_period}",
+                line=dict(color="#d32f2f", width=2, dash='dash')
+            ))
+            fig2.update_layout(
+                title=f"Relative Strength: {stock_row['TRADINGSYM']} vs {index_row['TRADINGSYM']}",
+                xaxis_title="Date",
+                yaxis_title="Relative Strength",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                height=500,
+                template="plotly_white",
+                margin=dict(l=10, r=10, t=40, b=10)
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+            st.markdown("#### Download Relative Strength Data")
+            rs_display_cols = ["DateTime", "StockClose", "IndexClose", "RS", "RS_SMA"]
+            st.dataframe(df_rs[rs_display_cols], use_container_width=True)
+            csv_rs = df_rs[rs_display_cols].to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download RS data as CSV",
+                data=csv_rs,
+                file_name=f'relative_strength_{stock_row["TRADINGSYM"]}_vs_{index_row["TRADINGSYM"]}.csv',
+                mime='text/csv'
+            )
+            st.info(
+                f"Relative Strength = Stock Close / Index Close × 100\n\n"
+                f"Blue: Raw RS, Red Dashed: SMA({rs_sma_period}) of RS"
+            )
+
+        # --- Download full OHLCV+EMA data ---
+        st.markdown("#### Download OHLCV+EMAs Data")
+        st.dataframe(df_stock, use_container_width=True)
+        csv = df_stock.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="Download data as CSV",
+            label="Download OHLCV+EMA data as CSV",
             data=csv,
-            file_name=f'relative_strength_{stock_row["TRADINGSYM"]}_vs_{index_row["TRADINGSYM"]}.csv',
+            file_name=f'candlestick_ema_{stock_row["TRADINGSYM"]}.csv',
             mime='text/csv'
         )
         st.info(
-            f"Relative Strength = Stock Close / Index Close × 100\n\n"
-            f"Blue: Raw RS, Red Dashed: SMA({sma_period}) of RS"
+            f"EMAs shown for periods: {', '.join([str(p) for p in ema_periods])}. "
+            "You can adjust the periods and days as needed."
         )
     except Exception as e:
-        st.error(f"Error fetching/calculating Relative Strength: {e}")
+        st.error(f"Error fetching/calculating chart: {e}")
