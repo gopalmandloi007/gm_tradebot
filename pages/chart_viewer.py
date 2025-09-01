@@ -16,14 +16,14 @@ def fetch_historical(client, segment, token, days):
     to_date = today.strftime("%d%m%Y%H%M")
     hist_csv = client.historical_csv(segment=segment, token=token, timeframe="day", frm=from_date, to=to_date)
     if not hist_csv.strip():
-        raise Exception("No data returned from broker for this symbol.")
+        return pd.DataFrame()
     hist_df = pd.read_csv(io.StringIO(hist_csv), header=None)
     if hist_df.shape[1] == 7:
         hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume", "OI"]
     elif hist_df.shape[1] == 6:
         hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume"]
     else:
-        raise Exception(f"Unexpected columns in historical data: {hist_df.shape[1]}")
+        return pd.DataFrame()
     hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
     hist_df = hist_df.sort_values("DateTime")
     hist_df = hist_df.drop_duplicates(subset=["DateTime"])
@@ -51,7 +51,7 @@ symbol = st.selectbox("Trading Symbol", segment_symbols["TRADINGSYM"].unique())
 token_row = segment_symbols[segment_symbols["TRADINGSYM"] == symbol]
 token = str(token_row["TOKEN"].iloc[0]) if not token_row.empty else None
 
-index_choice = st.selectbox("Compare Against Index", ["Nifty 50", "Nifty 500", "Nifty MidSmall 400"], index=0)
+index_choice = st.selectbox("Compare Against Index", ["Nifty 50", "Nifty 500", "Nifty MidSmall 400"], index=1)
 days_back = st.number_input("Number of Days (candles)", min_value=20, max_value=250, value=55, step=1)
 sma_period = st.number_input("RS SMA Period", min_value=2, max_value=55, value=20, step=1)
 
@@ -59,17 +59,32 @@ if st.button("Show Relative Strength Chart") and token:
     try:
         # Fetch symbol and index data
         df_symbol = fetch_historical(client, segment, token, days_back)
+        if df_symbol.empty:
+            st.warning(f"No data returned from broker for symbol: {symbol} (token: {token}, segment: {segment})")
+            st.info(
+                "Please check if the symbol is correct and available for the selected segment.\n"
+                "Tip: Try a more liquid/known symbol like RELIANCE-EQ for NSE, or check in your broker's web terminal."
+            )
+            st.stop()
+
         index_info = INDEX_MAPPING[index_choice]
         df_index = fetch_historical(client, index_info["segment"], index_info["token"], days_back)
-        # Align by date
+        if df_index.empty:
+            st.warning(f"No data returned for selected index: {index_choice}")
+            st.stop()
+
+        # Align by date and calculate RS
         df_symbol = df_symbol[["DateTime", "Close"]].rename(columns={"Close": "SymbolClose"})
         df_index = df_index[["DateTime", "Close"]].rename(columns={"Close": "IndexClose"})
         df_merged = pd.merge(df_symbol, df_index, on="DateTime", how="inner")
         df_merged = df_merged.sort_values("DateTime").reset_index(drop=True)
-        # Relative Strength calculation
+        if df_merged.empty:
+            st.warning("No overlapping dates between symbol and index data. Try a different symbol or index.")
+            st.stop()
+
         df_merged["RS"] = (df_merged["SymbolClose"] / df_merged["IndexClose"]) * 100
         df_merged["RS_SMA"] = df_merged["RS"].rolling(window=sma_period).mean()
-        # Chart
+
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=df_merged["DateTime"], y=df_merged["RS"],
