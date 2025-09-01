@@ -94,7 +94,7 @@ if st.button("Show Chart"):
         # --- Candlestick Chart with EMAs ---
         fig1 = go.Figure()
         fig1.add_trace(go.Candlestick(
-            x=df_stock["DateTime"],
+            x=df_stock["DateTime"].dt.strftime('%Y-%m-%d'),
             open=df_stock["Open"],
             high=df_stock["High"],
             low=df_stock["Low"],
@@ -105,13 +105,18 @@ if st.button("Show Chart"):
         ))
         for period in ema_periods:
             fig1.add_trace(go.Scatter(
-                x=df_stock["DateTime"], y=df_stock[f"EMA_{period}"],
+                x=df_stock["DateTime"].dt.strftime('%Y-%m-%d'), 
+                y=df_stock[f"EMA_{period}"],
                 mode="lines", name=f"EMA {period}",
                 line=dict(width=1.5)
             ))
         fig1.update_layout(
             title=f"{stock_row['TRADINGSYM']} Candlestick Chart with EMAs",
-            xaxis=dict(title="Date", rangeslider=dict(visible=False)),
+            xaxis=dict(
+                title="Date",
+                type="category",  # Remove gaps for missing dates
+                rangeslider=dict(visible=False)
+            ),
             yaxis=dict(title="Price"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             height=600,
@@ -123,7 +128,7 @@ if st.button("Show Chart"):
         # --- Volume Chart (separate) ---
         fig_vol = go.Figure()
         fig_vol.add_trace(go.Bar(
-            x=df_stock["DateTime"],
+            x=df_stock["DateTime"].dt.strftime('%Y-%m-%d'),
             y=df_stock["Volume"],
             name="Volume",
             marker=dict(color="#636EFA"),
@@ -131,7 +136,10 @@ if st.button("Show Chart"):
         ))
         fig_vol.update_layout(
             title=f"{stock_row['TRADINGSYM']} Volume Chart",
-            xaxis=dict(title="Date"),
+            xaxis=dict(
+                title="Date",
+                type="category"  # Remove gaps for missing dates
+            ),
             yaxis=dict(title="Volume"),
             height=300,
             template="plotly_white",
@@ -152,18 +160,23 @@ if st.button("Show Chart"):
 
             fig2 = go.Figure()
             fig2.add_trace(go.Scatter(
-                x=df_rs["DateTime"], y=df_rs["RS"],
+                x=df_rs["DateTime"].dt.strftime('%Y-%m-%d'), 
+                y=df_rs["RS"],
                 mode="lines", name="Relative Strength",
                 line=dict(color="#1976d2", width=2)
             ))
             fig2.add_trace(go.Scatter(
-                x=df_rs["DateTime"], y=df_rs["RS_SMA"],
+                x=df_rs["DateTime"].dt.strftime('%Y-%m-%d'), 
+                y=df_rs["RS_SMA"],
                 mode="lines", name=f"RS SMA {rs_sma_period}",
                 line=dict(color="#d32f2f", width=2, dash='dash')
             ))
             fig2.update_layout(
                 title=f"Relative Strength: {stock_row['TRADINGSYM']} vs {index_row['TRADINGSYM']}",
-                xaxis_title="Date",
+                xaxis=dict(
+                    title="Date",
+                    type="category"  # Remove gaps for missing dates
+                ),
                 yaxis_title="Relative Strength",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 height=400,
