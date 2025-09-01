@@ -45,7 +45,7 @@ def load_master_symbols():
 
 def fetch_historical(client, segment, token, days):
     today = datetime.today()
-    from_date = (today - timedelta(days=days*2)).strftime("%d%m%Y%H%M")  # buffer for holidays
+    from_date = (today - timedelta(days=days*2)).strftime("%d%m%Y%H%M")
     to_date = today.strftime("%d%m%Y%H%M")
     hist_csv = client.historical_csv(segment=segment, token=token, timeframe="day", frm=from_date, to=to_date)
     if not hist_csv.strip():
@@ -60,7 +60,6 @@ def fetch_historical(client, segment, token, days):
     hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
     hist_df = hist_df.sort_values("DateTime")
     hist_df = hist_df.drop_duplicates(subset=["DateTime"])
-    # Keep only last N trading days
     hist_df = hist_df.tail(days)
     hist_df = hist_df.reset_index(drop=True)
     return hist_df
@@ -91,7 +90,6 @@ def fetch_benchmark(client, token, days):
         return None
 
 def calc_relative_strength(main_df, bench_df):
-    # Align by date
     merged = pd.merge(main_df[["DateTime", "Close"]], bench_df[["DateTime", "Close"]],
                       on="DateTime", suffixes=('', '_bench'))
     if len(merged) < 5:
@@ -119,7 +117,6 @@ def show_chart_terminal():
 
     days = st.number_input("How many candles (days)?", min_value=20, max_value=250, value=70, step=1)
 
-    # --- EMA Controls ---
     st.markdown("##### Overlay EMAs:")
     col1, col2, col3, col4 = st.columns(4)
     ema20 = col1.toggle("EMA 20", value=True)
@@ -132,31 +129,32 @@ def show_chart_terminal():
     if ema100: ema_periods.append(100)
     if ema200: ema_periods.append(200)
 
-    # --- Volume Controls ---
     st.markdown("##### Volume & Volume SMA (20):")
     show_volume = st.toggle("Show Volume", value=True)
     show_volsma = st.toggle("Show Volume SMA 20", value=True)
 
-    # --- RS Controls ---
     st.markdown("##### Relative Strength:")
     rs_bench = st.selectbox("Overlay RS against", ["None"] + list(INDEX_TOKENS.keys()), index=0)
 
-    # --- Main chart logic ---
     if token:
         try:
+            # 1. Fetch Historical Data
             hist_df = fetch_historical(client, segment, token, days)
             current = fetch_current_candle(client, segment, token)
-            # Only add current candle if not already present
+            # Add current candle if not already present
             if current is not None:
                 last_hist_date = hist_df.iloc[-1]["DateTime"].date() if not hist_df.empty else None
                 if current["DateTime"].date() != last_hist_date:
                     hist_df = pd.concat([hist_df, pd.DataFrame([current])], ignore_index=True)
             hist_df = hist_df.sort_values("DateTime").reset_index(drop=True)
 
-            # ---- Broker-style: Price panel ----
-            fig = go.Figure()
+            # 2. Calculate EMAs
+            ema_lines = {}
+            for p in ema_periods:
+                ema_lines[p] = calc_ema(hist_df, p)
 
-            # Candlestick (OHLC only, like brokers)
+            # 3. Main Chart: Candlestick + EMA's
+            fig = go.Figure()
             fig.add_trace(go.Candlestick(
                 x=hist_df["DateTime"],
                 open=hist_df["Open"],
@@ -167,18 +165,13 @@ def show_chart_terminal():
                 increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
                 showlegend=False
             ))
-
-            # EMA overlays (as line, like broker)
             colors = {20: "#1976d2", 50: "#d32f2f", 100: "#f57c00", 200: "#388e3c"}
-            for p in ema_periods:
-                ema_line = calc_ema(hist_df, p)
+            for p, ema in ema_lines.items():
                 fig.add_trace(go.Scatter(
-                    x=hist_df["DateTime"], y=ema_line,
+                    x=hist_df["DateTime"], y=ema,
                     name=f"EMA {p}", mode="lines", line=dict(width=2, color=colors.get(p, None)),
                     showlegend=True
                 ))
-
-            # --- Layout: Broker style, xaxis as category, dark background ---
             fig.update_layout(
                 template="plotly_dark",
                 margin=dict(l=10,r=10,t=40,b=10),
@@ -188,37 +181,37 @@ def show_chart_terminal():
                 showlegend=True,
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
+            st.plotly_chart(fig, use_container_width=True)
 
-            # ---- Volume panel (line chart with SMA) ----
+            # 4. Volume chart below
             if show_volume or show_volsma:
-                vol_trace = []
+                fig_vol = go.Figure()
                 if show_volume:
-                    vol_trace.append(go.Scatter(
+                    fig_vol.add_trace(go.Scatter(
                         x=hist_df["DateTime"], y=hist_df["Volume"],
                         name="Volume",
-                        mode="lines", line=dict(width=1, color="#bdbdbd"),
-                        yaxis="y2", showlegend=True
+                        mode="lines", line=dict(width=1, color="#bdbdbd")
                     ))
                 if show_volsma:
                     volsma = calc_vol_sma(hist_df, 20)
-                    vol_trace.append(go.Scatter(
+                    fig_vol.add_trace(go.Scatter(
                         x=hist_df["DateTime"], y=volsma,
                         name="Volume SMA 20",
-                        mode="lines", line=dict(width=2, color="#1976d2", dash='dot'),
-                        yaxis="y2", showlegend=True
+                        mode="lines", line=dict(width=2, color="#1976d2", dash='dot')
                     ))
-
-                # Add second yaxis for volume
-                fig.update_layout(
-                    yaxis2=dict(title="Volume", overlaying="y", side="right", showgrid=False,
-                                range=[0, max(hist_df["Volume"].max()*1.4, 1)], showticklabels=False)
+                fig_vol.update_layout(
+                    template="plotly_dark",
+                    title="Volume",
+                    margin=dict(l=10,r=10,t=40,b=10),
+                    height=200,
+                    xaxis=dict(type="category", showgrid=False, tickfont=dict(size=12)),
+                    yaxis=dict(title="Volume", showgrid=True, gridcolor="#444"),
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
-                for v in vol_trace:
-                    fig.add_trace(v)
+                st.plotly_chart(fig_vol, use_container_width=True)
 
-            st.plotly_chart(fig, use_container_width=True)
-
-            # ---- RS Panel ----
+            # 5. Relative Strength chart below
             if rs_bench != "None":
                 bench_token = INDEX_TOKENS.get(rs_bench)
                 bench_df = fetch_benchmark(client, bench_token, days)
@@ -250,6 +243,5 @@ def show_chart_terminal():
             st.error(f"Failed to fetch or display chart: {e}")
             st.info("Please ensure symbol has valid history and try again.")
 
-# ---- Page Entry Point ----
 if __name__ == "__main__" or "chart_terminal" in st.session_state:
     show_chart_terminal()
