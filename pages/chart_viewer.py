@@ -31,75 +31,69 @@ def fetch_historical(client, segment, token, days):
     hist_df = hist_df.reset_index(drop=True)
     return hist_df
 
-st.title("📈 Chart Viewer (OHLCV)")
+INDEX_MAPPING = {
+    "Nifty 50": {"segment": "NSE", "token": "256265"},
+    "Nifty 500": {"segment": "NSE", "token": "999920005"},
+    "Nifty MidSmall 400": {"segment": "NSE", "token": "999920388"},
+}
+
+st.title("📈 Relative Strength Chart")
 
 client = st.session_state.get("client")
 if not client:
     st.error("⚠️ Not logged in. Please login first from the Login page.")
     st.stop()
 
-# Load master symbol list
 df_master = load_master_symbols()
-
-# UI for symbol selection
 segment = st.selectbox("Exchange/Segment", sorted(df_master["SEGMENT"].unique()), index=0)
 segment_symbols = df_master[df_master["SEGMENT"] == segment].sort_values("TRADINGSYM")
 symbol = st.selectbox("Trading Symbol", segment_symbols["TRADINGSYM"].unique())
 token_row = segment_symbols[segment_symbols["TRADINGSYM"] == symbol]
 token = str(token_row["TOKEN"].iloc[0]) if not token_row.empty else None
 
-days_back = st.slider("How many candles (days)?", min_value=20, max_value=250, value=70, step=1)
+index_choice = st.selectbox("Compare Against Index", ["Nifty 50", "Nifty 500", "Nifty MidSmall 400"], index=0)
+days_back = st.number_input("Number of Days (candles)", min_value=20, max_value=250, value=55, step=1)
+sma_period = st.number_input("RS SMA Period", min_value=2, max_value=55, value=20, step=1)
 
-if st.button("Show Chart") and token:
+if st.button("Show Relative Strength Chart") and token:
     try:
-        df = fetch_historical(client, segment, token, days_back)
-        if df.empty:
-            st.error("No data returned for selected symbol.")
-        else:
-            df = df.sort_values("DateTime")
-            # OHLCV Chart
-            fig = go.Figure()
-
-            fig.add_trace(go.Candlestick(
-                x=df["DateTime"],
-                open=df["Open"],
-                high=df["High"],
-                low=df["Low"],
-                close=df["Close"],
-                name="OHLC",
-                increasing_line_color='green',
-                decreasing_line_color='red'
-            ))
-
-            # Add Volume as bar chart (secondary y-axis)
-            fig.add_trace(go.Bar(
-                x=df["DateTime"],
-                y=df["Volume"],
-                name="Volume",
-                marker=dict(color="#636EFA"),
-                opacity=0.3,
-                yaxis='y2'
-            ))
-
-            fig.update_layout(
-                title=f"{segment} : {symbol} ({token}) OHLCV Chart",
-                xaxis=dict(title="Date", rangeslider=dict(visible=False)),
-                yaxis=dict(title="Price"),
-                yaxis2=dict(
-                    title="Volume",
-                    overlaying='y',
-                    side='right',
-                    showgrid=False,
-                    position=1.0
-                ),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                height=600,
-                template="plotly_white",
-                margin=dict(l=10, r=10, t=40, b=10)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.info("OHLCV = Open, High, Low, Close, Volume. Use the controls above to select other stocks or timeframes.")
-
+        # Fetch symbol and index data
+        df_symbol = fetch_historical(client, segment, token, days_back)
+        index_info = INDEX_MAPPING[index_choice]
+        df_index = fetch_historical(client, index_info["segment"], index_info["token"], days_back)
+        # Align by date
+        df_symbol = df_symbol[["DateTime", "Close"]].rename(columns={"Close": "SymbolClose"})
+        df_index = df_index[["DateTime", "Close"]].rename(columns={"Close": "IndexClose"})
+        df_merged = pd.merge(df_symbol, df_index, on="DateTime", how="inner")
+        df_merged = df_merged.sort_values("DateTime").reset_index(drop=True)
+        # Relative Strength calculation
+        df_merged["RS"] = (df_merged["SymbolClose"] / df_merged["IndexClose"]) * 100
+        df_merged["RS_SMA"] = df_merged["RS"].rolling(window=sma_period).mean()
+        # Chart
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_merged["DateTime"], y=df_merged["RS"],
+            mode="lines", name="Relative Strength",
+            line=dict(color="#1976d2", width=2)
+        ))
+        fig.add_trace(go.Scatter(
+            x=df_merged["DateTime"], y=df_merged["RS_SMA"],
+            mode="lines", name=f"RS SMA {sma_period}",
+            line=dict(color="#d32f2f", width=2, dash='dash')
+        ))
+        fig.update_layout(
+            title=f"Relative Strength: {symbol} vs {index_choice}",
+            xaxis_title="Date",
+            yaxis_title="Relative Strength",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            height=500,
+            template="plotly_white",
+            margin=dict(l=10, r=10, t=40, b=10)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.info(
+            f"Relative Strength = Symbol Close / Index Close × 100\n\n"
+            f"Blue: Raw RS, Red Dashed: SMA({sma_period}) of RS"
+        )
     except Exception as e:
-        st.error(f"Error fetching chart data: {e}")
+        st.error(f"Error fetching or calculating Relative Strength: {e}")
