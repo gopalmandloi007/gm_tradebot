@@ -31,12 +31,6 @@ def fetch_historical(client, segment, token, days):
     hist_df = hist_df.reset_index(drop=True)
     return hist_df
 
-INDEX_MAPPING = {
-    "Nifty 50": {"segment": "NSE", "token": "256265"},
-    "Nifty 500": {"segment": "NSE", "token": "999920005"},
-    "Nifty MidSmall 400": {"segment": "NSE", "token": "999920388"},
-}
-
 st.title("📈 Relative Strength Chart")
 
 client = st.session_state.get("client")
@@ -45,32 +39,40 @@ if not client:
     st.stop()
 
 df_master = load_master_symbols()
+
+# Trading Symbol selection (stock)
 segment = st.selectbox("Exchange/Segment", sorted(df_master["SEGMENT"].unique()), index=0)
 segment_symbols = df_master[df_master["SEGMENT"] == segment].sort_values("TRADINGSYM")
 symbol = st.selectbox("Trading Symbol", segment_symbols["TRADINGSYM"].unique())
-token_row = segment_symbols[segment_symbols["TRADINGSYM"] == symbol]
-token = str(token_row["TOKEN"].iloc[0]) if not token_row.empty else None
+symbol_row = segment_symbols[segment_symbols["TRADINGSYM"] == symbol].iloc[0]
+symbol_token = str(symbol_row["TOKEN"])
+symbol_segment = symbol_row["SEGMENT"]
 
-index_choice = st.selectbox("Compare Against Index", ["Nifty 50", "Nifty 500", "Nifty MidSmall 400"], index=1)
+# Index selection from master file (only 'index' type instruments)
+index_candidates = df_master[df_master["INSTRUMENT"].str.contains("INDEX", case=False, na=False)]
+if index_candidates.empty:
+    st.warning("No index symbols found in master file. Please check your master CSV.")
+    st.stop()
+index_display_names = [f"{row['TRADINGSYM']} ({row['SYMBOL']})" for _, row in index_candidates.iterrows()]
+index_choice = st.selectbox("Compare Against Index", index_display_names)
+index_row = index_candidates.iloc[index_display_names.index(index_choice)]
+index_token = str(index_row["TOKEN"])
+index_segment = index_row["SEGMENT"]
+
 days_back = st.number_input("Number of Days (candles)", min_value=20, max_value=250, value=55, step=1)
 sma_period = st.number_input("RS SMA Period", min_value=2, max_value=55, value=20, step=1)
 
-if st.button("Show Relative Strength Chart") and token:
+if st.button("Show Relative Strength Chart"):
     try:
         # Fetch symbol and index data
-        df_symbol = fetch_historical(client, segment, token, days_back)
+        df_symbol = fetch_historical(client, symbol_segment, symbol_token, days_back)
         if df_symbol.empty:
-            st.warning(f"No data returned from broker for symbol: {symbol} (token: {token}, segment: {segment})")
-            st.info(
-                "Please check if the symbol is correct and available for the selected segment.\n"
-                "Tip: Try a more liquid/known symbol like RELIANCE-EQ for NSE, or check in your broker's web terminal."
-            )
+            st.warning(f"No data returned for: {symbol} (token: {symbol_token}, segment: {symbol_segment})")
             st.stop()
 
-        index_info = INDEX_MAPPING[index_choice]
-        df_index = fetch_historical(client, index_info["segment"], index_info["token"], days_back)
+        df_index = fetch_historical(client, index_segment, index_token, days_back)
         if df_index.empty:
-            st.warning(f"No data returned for selected index: {index_choice}")
+            st.warning(f"No data returned for index: {index_row['TRADINGSYM']} (token: {index_token}, segment: {index_segment})")
             st.stop()
 
         # Align by date and calculate RS
@@ -79,7 +81,7 @@ if st.button("Show Relative Strength Chart") and token:
         df_merged = pd.merge(df_symbol, df_index, on="DateTime", how="inner")
         df_merged = df_merged.sort_values("DateTime").reset_index(drop=True)
         if df_merged.empty:
-            st.warning("No overlapping dates between symbol and index data. Try a different symbol or index.")
+            st.warning("No overlapping dates between symbol and index data. Try different selections.")
             st.stop()
 
         df_merged["RS"] = (df_merged["SymbolClose"] / df_merged["IndexClose"]) * 100
@@ -97,7 +99,7 @@ if st.button("Show Relative Strength Chart") and token:
             line=dict(color="#d32f2f", width=2, dash='dash')
         ))
         fig.update_layout(
-            title=f"Relative Strength: {symbol} vs {index_choice}",
+            title=f"Relative Strength: {symbol} vs {index_row['TRADINGSYM']}",
             xaxis_title="Date",
             yaxis_title="Relative Strength",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
