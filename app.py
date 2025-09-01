@@ -3,7 +3,7 @@ from pages.holdings import show as show_holdings
 from pages.orderbook import show as show_orderbook
 from pages.trades import show as show_trades
 from pages.login import show as show_login
-from pages.place_order import show as show_place_order
+from pages.place_order import show_place_order
 from pages.gtt_orderbook import show as show_gtt_orderbook
 from pages.positions import show as show_positions
 from pages.place_gtt_order import show_place_gtt_order
