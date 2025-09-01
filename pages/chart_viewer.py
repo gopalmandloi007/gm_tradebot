@@ -87,6 +87,10 @@ if st.button("Show Chart"):
             st.warning(f"No data for index: {index_row['TRADINGSYM']} ({index_row['TOKEN']}, {index_row['SEGMENT']})")
             st.stop()
 
+        # Sort and deduplicate just in case
+        df_stock = df_stock.sort_values("DateTime").drop_duplicates(subset=["DateTime"]).reset_index(drop=True)
+        df_index = df_index.sort_values("DateTime").drop_duplicates(subset=["DateTime"]).reset_index(drop=True)
+
         # Calculate EMAs
         for period in ema_periods:
             df_stock[f"EMA_{period}"] = ema(df_stock["Close"], period)
@@ -94,7 +98,7 @@ if st.button("Show Chart"):
         # --- Candlestick Chart with EMAs ---
         fig1 = go.Figure()
         fig1.add_trace(go.Candlestick(
-            x=df_stock["DateTime"].dt.strftime('%Y-%m-%d'),
+            x=df_stock["DateTime"].dt.date,
             open=df_stock["Open"],
             high=df_stock["High"],
             low=df_stock["Low"],
@@ -105,7 +109,7 @@ if st.button("Show Chart"):
         ))
         for period in ema_periods:
             fig1.add_trace(go.Scatter(
-                x=df_stock["DateTime"].dt.strftime('%Y-%m-%d'), 
+                x=df_stock["DateTime"].dt.date, 
                 y=df_stock[f"EMA_{period}"],
                 mode="lines", name=f"EMA {period}",
                 line=dict(width=1.5)
@@ -128,7 +132,7 @@ if st.button("Show Chart"):
         # --- Volume Chart (separate) ---
         fig_vol = go.Figure()
         fig_vol.add_trace(go.Bar(
-            x=df_stock["DateTime"].dt.strftime('%Y-%m-%d'),
+            x=df_stock["DateTime"].dt.date,
             y=df_stock["Volume"],
             name="Volume",
             marker=dict(color="#636EFA"),
@@ -160,13 +164,13 @@ if st.button("Show Chart"):
 
             fig2 = go.Figure()
             fig2.add_trace(go.Scatter(
-                x=df_rs["DateTime"].dt.strftime('%Y-%m-%d'), 
+                x=df_rs["DateTime"].dt.date, 
                 y=df_rs["RS"],
                 mode="lines", name="Relative Strength",
                 line=dict(color="#1976d2", width=2)
             ))
             fig2.add_trace(go.Scatter(
-                x=df_rs["DateTime"].dt.strftime('%Y-%m-%d'), 
+                x=df_rs["DateTime"].dt.date, 
                 y=df_rs["RS_SMA"],
                 mode="lines", name=f"RS SMA {rs_sma_period}",
                 line=dict(color="#d32f2f", width=2, dash='dash')
