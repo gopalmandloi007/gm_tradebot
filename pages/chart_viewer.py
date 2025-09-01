@@ -11,18 +11,16 @@ def load_master_symbols(master_csv_path="data/master/allmaster.csv"):
     return df
 
 def select_symbol(df, label="Trading Symbol"):
-    # Returns row of selected symbol (segment, token, etc.)
     symbol = st.selectbox(label, df["TRADINGSYM"].unique())
     row = df[df["TRADINGSYM"] == symbol].iloc[0]
     return row
 
 def select_index_symbol(df, label="Index Symbol"):
-    # Try to select index-like symbols: filter by common names or instrument
+    # Filter by common index names or instrument
     index_candidates = df[
         df["INSTRUMENT"].str.contains("INDEX", case=False, na=False) |
         df["TRADINGSYM"].str.contains("NIFTY|IDX|SENSEX|BANKNIFTY|MIDSMALL|500|100", case=False, na=False)
     ].drop_duplicates("TRADINGSYM")
-    # If none, fallback to all unique
     if index_candidates.empty:
         index_candidates = df
     index_symbol = st.selectbox(label, index_candidates["TRADINGSYM"].unique())
@@ -59,7 +57,7 @@ if not client:
 
 df_master = load_master_symbols()
 
-# Exchange filter for user convenience
+# Exchange filter
 segment = st.selectbox("Exchange/Segment", sorted(df_master["SEGMENT"].unique()), index=0)
 segment_df = df_master[df_master["SEGMENT"] == segment]
 
@@ -67,7 +65,7 @@ segment_df = df_master[df_master["SEGMENT"] == segment]
 st.markdown("#### Select Stock Symbol")
 stock_row = select_symbol(segment_df, label="Stock Trading Symbol")
 
-# Index selection, from same file (but let user select any symbol)
+# Index selection
 st.markdown("#### Select Index or Benchmark Symbol")
 index_row = select_index_symbol(df_master, label="Index Trading Symbol")
 
@@ -119,6 +117,18 @@ if st.button("Show Relative Strength Chart"):
             margin=dict(l=10, r=10, t=40, b=10)
         )
         st.plotly_chart(fig, use_container_width=True)
+        
+        # Show data table and download button
+        st.markdown("#### Download Relative Strength Data")
+        display_cols = ["DateTime", "StockClose", "IndexClose", "RS", "RS_SMA"]
+        st.dataframe(df_merged[display_cols], use_container_width=True)
+        csv = df_merged[display_cols].to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download data as CSV",
+            data=csv,
+            file_name=f'relative_strength_{stock_row["TRADINGSYM"]}_vs_{index_row["TRADINGSYM"]}.csv',
+            mime='text/csv'
+        )
         st.info(
             f"Relative Strength = Stock Close / Index Close × 100\n\n"
             f"Blue: Raw RS, Red Dashed: SMA({sma_period}) of RS"
