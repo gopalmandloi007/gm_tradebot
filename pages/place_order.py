@@ -4,7 +4,6 @@ import pandas as pd
 import io
 import zipfile
 import requests
-import time
 import os
 
 MASTER_URL = "https://app.definedgesecurities.com/public/allmaster.zip"
@@ -20,7 +19,8 @@ def download_and_extract_master():
             with z.open(csv_name) as f:
                 df = pd.read_csv(f, header=None)
         df.columns = ["SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT","EXPIRY",
-                      "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER","ISIN","PRICEMULT","COMPANY"]
+                      "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER",
+                      "ISIN","PRICEMULT","COMPANY"]
         os.makedirs("data/master", exist_ok=True)
         df.to_csv(MASTER_FILE, index=False)
         return df
@@ -61,10 +61,7 @@ def show_place_order():
     df_exch = df_symbols[df_symbols["SEGMENT"] == exchange]
 
     # ---- Trading Symbol selection ----
-    selected_symbol = st.selectbox(
-        "Trading Symbol",
-        df_exch["TRADINGSYM"].tolist()
-    )
+    selected_symbol = st.selectbox("Trading Symbol", df_exch["TRADINGSYM"].tolist())
 
     # Get token for LTP
     token_row = df_exch[df_exch["TRADINGSYM"] == selected_symbol]
@@ -89,20 +86,24 @@ def show_place_order():
         
         # ✅ Default Limit Order
         price_type = st.radio("Price Type", ["LIMIT", "MARKET", "SL-LIMIT", "SL-MARKET"], index=0)
-        product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=2)
 
+        # ✅ Default CNC
+        product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=0)
+
+        # ✅ Place by selection
         place_by = st.radio("Place by", ["Quantity", "Amount"], index=0)
 
-        # Default values
         quantity, amount = 0, 0.0
 
         if place_by == "Quantity":
             quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
             amount = quantity * price_input
+            # ✅ Calculation turant dikh raha hai
             st.info(f"💵 Estimated Amount: ₹{amount:,.2f}")
         else:
             amount = st.number_input("Amount", min_value=0.0, step=0.05, value=0.0)
             quantity = int(amount // price_input) if price_input > 0 else 0
+            # ✅ Calculation turant dikh raha hai
             st.info(f"🔢 Estimated Quantity: {quantity}")
 
         trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
