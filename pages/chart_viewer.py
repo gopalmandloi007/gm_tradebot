@@ -10,6 +10,25 @@ def load_master_symbols(master_csv_path="data/master/allmaster.csv"):
     df = pd.read_csv(master_csv_path)
     return df
 
+def select_symbol(df, label="Trading Symbol"):
+    # Returns row of selected symbol (segment, token, etc.)
+    symbol = st.selectbox(label, df["TRADINGSYM"].unique())
+    row = df[df["TRADINGSYM"] == symbol].iloc[0]
+    return row
+
+def select_index_symbol(df, label="Index Symbol"):
+    # Try to select index-like symbols: filter by common names or instrument
+    index_candidates = df[
+        df["INSTRUMENT"].str.contains("INDEX", case=False, na=False) |
+        df["TRADINGSYM"].str.contains("NIFTY|IDX|SENSEX|BANKNIFTY|MIDSMALL|500|100", case=False, na=False)
+    ].drop_duplicates("TRADINGSYM")
+    # If none, fallback to all unique
+    if index_candidates.empty:
+        index_candidates = df
+    index_symbol = st.selectbox(label, index_candidates["TRADINGSYM"].unique())
+    row = index_candidates[index_candidates["TRADINGSYM"] == index_symbol].iloc[0]
+    return row
+
 def fetch_historical(client, segment, token, days):
     today = datetime.today()
     from_date = (today - timedelta(days=days*2)).strftime("%d%m%Y%H%M")
@@ -40,51 +59,43 @@ if not client:
 
 df_master = load_master_symbols()
 
-# Trading Symbol selection (stock)
+# Exchange filter for user convenience
 segment = st.selectbox("Exchange/Segment", sorted(df_master["SEGMENT"].unique()), index=0)
-segment_symbols = df_master[df_master["SEGMENT"] == segment].sort_values("TRADINGSYM")
-symbol = st.selectbox("Trading Symbol", segment_symbols["TRADINGSYM"].unique())
-symbol_row = segment_symbols[segment_symbols["TRADINGSYM"] == symbol].iloc[0]
-symbol_token = str(symbol_row["TOKEN"])
-symbol_segment = symbol_row["SEGMENT"]
+segment_df = df_master[df_master["SEGMENT"] == segment]
 
-# Index selection from master file (only 'index' type instruments)
-index_candidates = df_master[df_master["INSTRUMENT"].str.contains("INDEX", case=False, na=False)]
-if index_candidates.empty:
-    st.warning("No index symbols found in master file. Please check your master CSV.")
-    st.stop()
-index_display_names = [f"{row['TRADINGSYM']} ({row['SYMBOL']})" for _, row in index_candidates.iterrows()]
-index_choice = st.selectbox("Compare Against Index", index_display_names)
-index_row = index_candidates.iloc[index_display_names.index(index_choice)]
-index_token = str(index_row["TOKEN"])
-index_segment = index_row["SEGMENT"]
+# Symbol selection
+st.markdown("#### Select Stock Symbol")
+stock_row = select_symbol(segment_df, label="Stock Trading Symbol")
+
+# Index selection, from same file (but let user select any symbol)
+st.markdown("#### Select Index or Benchmark Symbol")
+index_row = select_index_symbol(df_master, label="Index Trading Symbol")
 
 days_back = st.number_input("Number of Days (candles)", min_value=20, max_value=250, value=55, step=1)
 sma_period = st.number_input("RS SMA Period", min_value=2, max_value=55, value=20, step=1)
 
 if st.button("Show Relative Strength Chart"):
     try:
-        # Fetch symbol and index data
-        df_symbol = fetch_historical(client, symbol_segment, symbol_token, days_back)
-        if df_symbol.empty:
-            st.warning(f"No data returned for: {symbol} (token: {symbol_token}, segment: {symbol_segment})")
+        df_stock = fetch_historical(client, stock_row["SEGMENT"], stock_row["TOKEN"], days_back)
+        if df_stock.empty:
+            st.warning(f"No data for: {stock_row['TRADINGSYM']} ({stock_row['TOKEN']}, {stock_row['SEGMENT']})")
             st.stop()
 
-        df_index = fetch_historical(client, index_segment, index_token, days_back)
+        df_index = fetch_historical(client, index_row["SEGMENT"], index_row["TOKEN"], days_back)
         if df_index.empty:
-            st.warning(f"No data returned for index: {index_row['TRADINGSYM']} (token: {index_token}, segment: {index_segment})")
+            st.warning(f"No data for index: {index_row['TRADINGSYM']} ({index_row['TOKEN']}, {index_row['SEGMENT']})")
             st.stop()
 
-        # Align by date and calculate RS
-        df_symbol = df_symbol[["DateTime", "Close"]].rename(columns={"Close": "SymbolClose"})
+        # Align and calculate RS
+        df_stock = df_stock[["DateTime", "Close"]].rename(columns={"Close": "StockClose"})
         df_index = df_index[["DateTime", "Close"]].rename(columns={"Close": "IndexClose"})
-        df_merged = pd.merge(df_symbol, df_index, on="DateTime", how="inner")
+        df_merged = pd.merge(df_stock, df_index, on="DateTime", how="inner")
         df_merged = df_merged.sort_values("DateTime").reset_index(drop=True)
         if df_merged.empty:
-            st.warning("No overlapping dates between symbol and index data. Try different selections.")
+            st.warning("No overlapping dates between stock and index data.")
             st.stop()
 
-        df_merged["RS"] = (df_merged["SymbolClose"] / df_merged["IndexClose"]) * 100
+        df_merged["RS"] = (df_merged["StockClose"] / df_merged["IndexClose"]) * 100
         df_merged["RS_SMA"] = df_merged["RS"].rolling(window=sma_period).mean()
 
         fig = go.Figure()
@@ -99,7 +110,7 @@ if st.button("Show Relative Strength Chart"):
             line=dict(color="#d32f2f", width=2, dash='dash')
         ))
         fig.update_layout(
-            title=f"Relative Strength: {symbol} vs {index_row['TRADINGSYM']}",
+            title=f"Relative Strength: {stock_row['TRADINGSYM']} vs {index_row['TRADINGSYM']}",
             xaxis_title="Date",
             yaxis_title="Relative Strength",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -109,8 +120,8 @@ if st.button("Show Relative Strength Chart"):
         )
         st.plotly_chart(fig, use_container_width=True)
         st.info(
-            f"Relative Strength = Symbol Close / Index Close × 100\n\n"
+            f"Relative Strength = Stock Close / Index Close × 100\n\n"
             f"Blue: Raw RS, Red Dashed: SMA({sma_period}) of RS"
         )
     except Exception as e:
-        st.error(f"Error fetching or calculating Relative Strength: {e}")
+        st.error(f"Error fetching/calculating Relative Strength: {e}")
