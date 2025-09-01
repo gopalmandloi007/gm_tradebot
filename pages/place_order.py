@@ -4,6 +4,7 @@ import pandas as pd
 import io
 import zipfile
 import requests
+import time
 import os
 
 MASTER_URL = "https://app.definedgesecurities.com/public/allmaster.zip"
@@ -18,9 +19,11 @@ def download_and_extract_master():
             csv_name = z.namelist()[0]
             with z.open(csv_name) as f:
                 df = pd.read_csv(f, header=None)
-        df.columns = ["SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT","EXPIRY",
-                      "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER",
-                      "ISIN","PRICEMULT","COMPANY"]
+        df.columns = [
+            "SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT","EXPIRY",
+            "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER",
+            "ISIN","PRICEMULT","COMPANY"
+        ]
         os.makedirs("data/master", exist_ok=True)
         df.to_csv(MASTER_FILE, index=False)
         return df
@@ -30,8 +33,7 @@ def download_and_extract_master():
 
 def load_master_symbols():
     try:
-        df = pd.read_csv(MASTER_FILE)
-        return df
+        return pd.read_csv(MASTER_FILE)
     except:
         return download_and_extract_master()
 
@@ -67,14 +69,11 @@ def show_place_order():
     token_row = df_exch[df_exch["TRADINGSYM"] == selected_symbol]
     token = int(token_row["TOKEN"].values[0]) if not token_row.empty else None
 
-    # ---- Initial LTP fetch ----
+    # ---- Initial LTP ----
     initial_ltp = fetch_ltp(client, exchange, token) if token else 0.0
     price_input = st.number_input("Price", min_value=0.0, step=0.05, value=initial_ltp)
 
-    # ---- Show LTP ----
-    st.metric("📈 LTP", f"{initial_ltp:.2f}")
-
-    # ---- Fetch user limits ----
+    # ---- User Limits ----
     limits = client.api_get("/limits")
     cash_available = float(limits.get("cash", 0.0))
     st.info(f"💰 Cash Available: ₹{cash_available:,.2f}")
@@ -83,59 +82,62 @@ def show_place_order():
     with st.form("place_order_form"):
         st.subheader("Order Details")
         order_type = st.radio("Order Type", ["BUY", "SELL"])
-        
-        # ✅ Default Limit Order
-        price_type = st.radio("Price Type", ["LIMIT", "MARKET", "SL-LIMIT", "SL-MARKET"], index=0)
-
-        # ✅ Default CNC
-        product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=0)
-
-        # ✅ Place by selection
-        place_by = st.radio("Place by", ["Quantity", "Amount"], index=0)
-
-        quantity, amount = 0, 0.0
-
-        if place_by == "Quantity":
-            quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
-            amount = quantity * price_input
-            # ✅ Calculation turant dikh raha hai
-            st.info(f"💵 Estimated Amount: ₹{amount:,.2f}")
-        else:
-            amount = st.number_input("Amount", min_value=0.0, step=0.05, value=0.0)
-            quantity = int(amount // price_input) if price_input > 0 else 0
-            # ✅ Calculation turant dikh raha hai
-            st.info(f"🔢 Estimated Quantity: {quantity}")
-
+        price_type = st.radio("Price Type", ["MARKET", "LIMIT", "SL-LIMIT", "SL-MARKET"], index=1)  # LIMIT default
+        product_type = st.selectbox("Product Type", ["CNC", "INTRADAY", "NORMAL"], index=0)  # CNC default
+        quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
         trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
         validity = st.selectbox("Validity", ["DAY", "IOC", "EOS"], index=0)
         remarks = st.text_input("Remarks (optional)", "")
         submitted = st.form_submit_button("🚀 Place Order")
 
-    # ---- Place order ----
+    # ---- Confirmation step ----
     if submitted:
-        payload = {
-            "exchange": exchange,
-            "tradingsymbol": selected_symbol,
-            "order_type": order_type,
-            "price": str(price_input),
-            "price_type": price_type,
-            "product_type": product_type,
-            "quantity": str(quantity),
-            "validity": validity,
-        }
+        est_amount = price_input * quantity
+
+        st.warning("⚠️ Please confirm your order before final submission:")
+        st.write(f"**Symbol:** {selected_symbol}")
+        st.write(f"**Order Type:** {order_type}")
+        st.write(f"**Price Type:** {price_type}")
+        st.write(f"**Product Type:** {product_type}")
+        st.write(f"**Quantity:** {quantity}")
+        st.write(f"**Price:** ₹{price_input}")
+        st.write(f"**Estimated Amount:** ₹{est_amount:,.2f}")
         if trigger_price > 0:
-            payload["trigger_price"] = str(trigger_price)
+            st.write(f"**Trigger Price:** ₹{trigger_price}")
         if remarks:
-            payload["remarks"] = remarks
+            st.write(f"**Remarks:** {remarks}")
 
-        st.write("📦 Sending payload:")
-        st.json(payload)
+        col1, col2 = st.columns(2)
+        confirm = col1.button("✅ Confirm Order")
+        cancel = col2.button("❌ Cancel")
 
-        resp = client.place_order(payload)
-        st.write("📬 API Response:")
-        st.json(resp)
+        if confirm:
+            payload = {
+                "exchange": exchange,
+                "tradingsymbol": selected_symbol,
+                "order_type": order_type,
+                "price": str(price_input),
+                "price_type": price_type,
+                "product_type": product_type,
+                "quantity": str(quantity),
+                "validity": validity,
+            }
+            if trigger_price > 0:
+                payload["trigger_price"] = str(trigger_price)
+            if remarks:
+                payload["remarks"] = remarks
 
-        if resp.get("status") == "SUCCESS":
-            st.success(f"✅ Order placed successfully. Order ID: {resp.get('order_id')}")
-        else:
-            st.error(f"❌ Order placement failed. Response: {resp}")
+            st.write("📦 Sending payload:")
+            st.json(payload)
+
+            resp = client.place_order(payload)
+            st.write("📬 API Response:")
+            st.json(resp)
+
+            if resp.get("status") == "SUCCESS":
+                st.success(f"✅ Order placed successfully. Order ID: {resp.get('order_id')}")
+            else:
+                st.error(f"❌ Order placement failed. Response: {resp}")
+
+        elif cancel:
+            st.info("❎ Order cancelled. You can modify and submit again.")
