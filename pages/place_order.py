@@ -98,15 +98,15 @@ def show_place_order():
         trigger_price = st.number_input("Trigger Price (for SL orders)", min_value=0.0, step=0.05, value=0.0)
         validity = st.selectbox("Validity", ["DAY", "IOC", "EOS"], index=0)
         remarks = st.text_input("Remarks (optional)", "")
-        submitted = st.form_submit_button("🚀 Review Order")
+        review = st.form_submit_button("🔍 Review Order")
 
-    # ---- Confirmation ----
-    if submitted:
-        # Determine quantity if placed by amount
+    if review:
+        # Calculate quantity if placed by amount
         if place_by == "Amount" and amount > 0 and initial_ltp > 0:
             quantity = int(amount // initial_ltp)
 
-        payload = {
+        # Prepare payload
+        st.session_state["pending_order"] = {
             "exchange": exchange,
             "tradingsymbol": selected_symbol,
             "order_type": order_type,
@@ -117,32 +117,25 @@ def show_place_order():
             "validity": validity,
         }
         if trigger_price > 0:
-            payload["trigger_price"] = str(trigger_price)
+            st.session_state["pending_order"]["trigger_price"] = str(trigger_price)
         if remarks:
-            payload["remarks"] = remarks
+            st.session_state["pending_order"]["remarks"] = remarks
 
+    # ---- Confirmation (only if order is reviewed) ----
+    if "pending_order" in st.session_state:
         st.info("📋 Please confirm your order details:")
-        st.json(payload)
+        st.json(st.session_state["pending_order"])
 
-        confirm = st.radio("Do you want to place this order?", ["No", "Yes"], index=0)
-        if confirm == "Yes":
-            resp = client.place_order(payload)
+        if st.button("🚀 Confirm & Place Order"):
+            resp = client.place_order(st.session_state["pending_order"])
             st.write("📬 API Response:")
             st.json(resp)
 
             if resp.get("status") == "SUCCESS":
                 st.success(f"✅ Order placed successfully. Order ID: {resp.get('order_id')}")
+                del st.session_state["pending_order"]  # clear after placing
             else:
                 st.error(f"❌ Order placement failed. Response: {resp}")
-        else:
-            st.warning("⚠️ Order not placed. You can modify details and resubmit.")
-    # ---- Auto-refresh LTP ----
-    if token:
-        for i in range(1):  # only one refresh on page load, further can use while loop in async or callback
-            current_ltp = fetch_ltp(client, exchange, token)
-            ltp_container.metric("📈 LTP", f"{current_ltp:.2f}")
-            time.sleep(1)  # adjust interval if needed
-
     # ---- Place order ----
     if submitted:
         # Determine quantity if placed by amount
