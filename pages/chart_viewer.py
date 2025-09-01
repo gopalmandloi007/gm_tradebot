@@ -41,7 +41,8 @@ def fetch_historical(client, segment, token, days):
         hist_df.columns = ["DateTime", "Open", "High", "Low", "Close", "Volume"]
     else:
         return pd.DataFrame()
-    hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"])
+    # Parse DateTime as per API spec: ddmmyyyyHHMM
+    hist_df["DateTime"] = pd.to_datetime(hist_df["DateTime"].astype(str), format="%d%m%Y%H%M", errors="coerce")
     hist_df = hist_df.sort_values("DateTime")
     hist_df = hist_df.drop_duplicates(subset=["DateTime"])
     hist_df = hist_df.tail(days)
