@@ -10,6 +10,42 @@ MASTER_URL = "https://app.definedgesecurities.com/public/allmaster.zip"
 MASTER_FILE = "data/master/allmaster.csv"
 
 # ---- Load or update master file ----
+def download_and_extract_master():
+    try:
+        r = requests.get(MASTER_URL)
+        r.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            # Assuming first CSV in zip is the master
+            csv_name = z.namelist()[0]
+            with z.open(csv_name) as f:
+                df = pd.read_csv(f, header=None)
+        df.columns = ["SEGMENT","TOKEN","SYMBOL","TRADINGSYM","INSTRUMENT","EXPIRY",
+                      "TICKSIZE","LOTSIZE","OPTIONTYPE","STRIKE","PRICEPREC","MULTIPLIER","ISIN","PRICEMULT","COMPANY"]
+        # Save locally
+        import os
+        os.makedirs("data/master", exist_ok=True)
+        df.to_csv(MASTER_FILE, index=False)
+        return df
+    except Exception as e:
+        st.error(f"Failed to download master file: {e}")
+        return pd.DataFrame()
+
+def load_master_symbols():
+    try:
+        df = pd.read_csv(MASTER_FILE)
+        return df
+    except:
+        return download_and_extract_master()
+
+# ---- Fetch LTP ----
+def fetch_ltp(client, exchange, token):
+    try:
+        quotes = client.get_quotes(exchange, str(token))
+        return float(quotes.get("ltp", 0.0))
+    except:
+        return 0.0
+
+# ---- Place order page ----
 def show_place_order():
     st.header("🛒 Place Order — Definedge")
 
@@ -20,27 +56,37 @@ def show_place_order():
 
     df_symbols = load_master_symbols()
 
-    # Use columns for a more compact, single-page feel
-    col1, col2 = st.columns(2)
+    # ---- Exchange selection ----
+    exchange = st.radio("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=0)
 
-    with col1:
-        exchange = st.radio("Exchange", ["NSE", "BSE", "NFO", "MCX"], index=0)
-        df_exch = df_symbols[df_symbols["SEGMENT"] == exchange]
-        selected_symbol = st.selectbox("Trading Symbol", df_exch["TRADINGSYM"].tolist())
-        token_row = df_exch[df_exch["TRADINGSYM"] == selected_symbol]
-        token = int(token_row["TOKEN"].values[0]) if not token_row.empty else None
-        initial_ltp = fetch_ltp(client, exchange, token) if token else 0.0
-        price_input = st.number_input("Price", min_value=0.0, step=0.05, value=initial_ltp)
+    # Filter master for selected exchange
+    df_exch = df_symbols[df_symbols["SEGMENT"] == exchange]
 
-    with col2:
-        limits = client.api_get("/limits")
-        cash_available = float(limits.get("cash", 0.0))
-        st.info(f"💰 Cash Available: ₹{cash_available:,.2f}")
+    # ---- Trading Symbol selection ----
+    selected_symbol = st.selectbox(
+        "Trading Symbol",
+        df_exch["TRADINGSYM"].tolist()
+    )
 
-        if token:
-            current_ltp = fetch_ltp(client, exchange, token)
-            st.metric("📈 LTP", f"{current_ltp:.2f}")
+    # Get token for LTP
+    token_row = df_exch[df_exch["TRADINGSYM"] == selected_symbol]
+    token = int(token_row["TOKEN"].values[0]) if not token_row.empty else None
 
+    # ---- Initial LTP fetch (set price once) ----
+    initial_ltp = fetch_ltp(client, exchange, token) if token else 0.0
+    price_input = st.number_input("Price", min_value=0.0, step=0.05, value=initial_ltp)
+
+    # ---- LTP display container (auto-refresh) ----
+    ltp_container = st.empty()
+    cash_container = st.empty()
+    margin_container = st.empty()
+
+    # ---- Fetch user limits ----
+    limits = client.api_get("/limits")
+    cash_available = float(limits.get("cash", 0.0))
+    cash_container.info(f"💰 Cash Available: ₹{cash_available:,.2f}")
+
+    # ---- Order form ----
     with st.form("place_order_form"):
         st.subheader("Order Details")
         order_type = st.radio("Order Type", ["BUY", "SELL"])
@@ -54,7 +100,16 @@ def show_place_order():
         remarks = st.text_input("Remarks (optional)", "")
         submitted = st.form_submit_button("🚀 Place Order")
 
+    # ---- Auto-refresh LTP ----
+    if token:
+        for i in range(1):  # only one refresh on page load, further can use while loop in async or callback
+            current_ltp = fetch_ltp(client, exchange, token)
+            ltp_container.metric("📈 LTP", f"{current_ltp:.2f}")
+            time.sleep(1)  # adjust interval if needed
+
+    # ---- Place order ----
     if submitted:
+        # Determine quantity if placed by amount
         if place_by == "Amount" and amount > 0 and initial_ltp > 0:
             quantity = int(amount // initial_ltp)
 
