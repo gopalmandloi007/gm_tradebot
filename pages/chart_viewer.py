@@ -50,7 +50,7 @@ def fetch_historical(client, segment, token, days):
 def ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
-st.title("📈 Candlestick, EMAs, and Relative Strength Chart")
+st.title("📈 Candlestick, EMAs, Relative Strength & Volume Chart")
 
 client = st.session_state.get("client")
 if not client:
@@ -91,7 +91,7 @@ if st.button("Show Chart"):
         for period in ema_periods:
             df_stock[f"EMA_{period}"] = ema(df_stock["Close"], period)
 
-        # Candlestick Chart with EMAs
+        # --- Candlestick Chart with EMAs ---
         fig1 = go.Figure()
         fig1.add_trace(go.Candlestick(
             x=df_stock["DateTime"],
@@ -109,31 +109,35 @@ if st.button("Show Chart"):
                 mode="lines", name=f"EMA {period}",
                 line=dict(width=1.5)
             ))
-        fig1.add_trace(go.Bar(
-            x=df_stock["DateTime"],
-            y=df_stock["Volume"],
-            name="Volume",
-            marker=dict(color="#636EFA"),
-            opacity=0.3,
-            yaxis='y2'
-        ))
         fig1.update_layout(
             title=f"{stock_row['TRADINGSYM']} Candlestick Chart with EMAs",
             xaxis=dict(title="Date", rangeslider=dict(visible=False)),
             yaxis=dict(title="Price"),
-            yaxis2=dict(
-                title="Volume",
-                overlaying='y',
-                side='right',
-                showgrid=False,
-                position=1.0
-            ),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            height=700,
+            height=600,
             template="plotly_white",
             margin=dict(l=10, r=10, t=40, b=10)
         )
         st.plotly_chart(fig1, use_container_width=True)
+
+        # --- Volume Chart (separate) ---
+        fig_vol = go.Figure()
+        fig_vol.add_trace(go.Bar(
+            x=df_stock["DateTime"],
+            y=df_stock["Volume"],
+            name="Volume",
+            marker=dict(color="#636EFA"),
+            opacity=0.7,
+        ))
+        fig_vol.update_layout(
+            title=f"{stock_row['TRADINGSYM']} Volume Chart",
+            xaxis=dict(title="Date"),
+            yaxis=dict(title="Volume"),
+            height=300,
+            template="plotly_white",
+            margin=dict(l=10, r=10, t=40, b=10)
+        )
+        st.plotly_chart(fig_vol, use_container_width=True)
 
         # --- Relative Strength Section ---
         df_stock_rs = df_stock[["DateTime", "Close"]].rename(columns={"Close": "StockClose"})
@@ -162,7 +166,7 @@ if st.button("Show Chart"):
                 xaxis_title="Date",
                 yaxis_title="Relative Strength",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                height=500,
+                height=400,
                 template="plotly_white",
                 margin=dict(l=10, r=10, t=40, b=10)
             )
