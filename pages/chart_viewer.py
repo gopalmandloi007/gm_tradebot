@@ -6,7 +6,12 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# --- Technical Indicator Helpers ---
+@st.cache_data
+def load_master_symbols(master_csv_path="data/master/allmaster.csv"):
+    df = pd.read_csv(master_csv_path)
+    # Ensure proper columns
+    # Columns: SEGMENT,TOKEN,SYMBOL,TRADINGSYM,INSTRUMENT,EXPIRY,TICKSIZE,LOTSIZE,OPTIONTYPE,STRIKE,PRICEPREC,MULTIPLIER,ISIN,PRICEMULT,COMPANY
+    return df
 
 def compute_rsi(data, window=14):
     delta = data['Close'].diff()
@@ -75,13 +80,11 @@ def minervini_sell_signals(df, lookback_days=15):
         signals['heavy_volume_down'] = True
     if signals['up_day_percent'] >= 70:
         signals['warnings'].append(
-            f"⚠️ {signals['up_day_percent']:.0f}% up days ({signals['up_days']}/{lookback_days}) - "
-            "Consider selling into strength"
+            f"⚠️ {signals['up_day_percent']:.0f}% up days ({signals['up_days']}/{lookback_days}) - Consider selling into strength"
         )
     if signals['largest_up_day'] > 5:
         signals['warnings'].append(
-            f"⚠️ Largest up day: {signals['largest_up_day']:.2f}% - "
-            "Potential climax run"
+            f"⚠️ Largest up day: {signals['largest_up_day']:.2f}% - Potential climax run"
         )
     if signals['exhaustion_gap']:
         signals['warnings'].append("⚠️ Exhaustion gap detected - Potential reversal signal")
@@ -109,7 +112,6 @@ def minervini_high_vs_ema20_interpretation(high, ema20):
     return diff_pct_rounded, interp
 
 # --- Streamlit UI & Client Data ---
-
 st.title("📈 Chart Viewer")
 
 client = st.session_state.get("client")
@@ -117,12 +119,18 @@ if not client:
     st.error("⚠️ Not logged in. Please login first from the Login page.")
     st.stop()
 
-# User inputs for symbol selection
-segment = st.selectbox("Exchange/Segment", ["NSE", "NFO", "BSE", "MCX"])
-token = st.text_input("Instrument Token", value="256265")  # Default Nifty 50
+# Load master symbols
+df_master = load_master_symbols()
+
+segment = st.selectbox("Exchange/Segment", sorted(df_master["SEGMENT"].unique()), index=0)
+segment_symbols = df_master[df_master["SEGMENT"] == segment].sort_values("TRADINGSYM")
+symbol = st.selectbox("Trading Symbol", segment_symbols["TRADINGSYM"].unique())
+token_row = segment_symbols[segment_symbols["TRADINGSYM"] == symbol]
+token = str(token_row["TOKEN"].iloc[0]) if not token_row.empty else None
+
 days_back = st.slider("How many candles (days)?", min_value=20, max_value=250, value=70, step=1)
 
-if st.button("Show Chart"):
+if st.button("Show Chart") and token:
     try:
         # --- Fetch data using your client-based method ---
         def fetch_historical(client, segment, token, days):
@@ -242,7 +250,7 @@ if st.button("Show Chart"):
                 )
             fig.update_layout(
                 height=600,
-                title=f"{segment}:{token} Technical Analysis",
+                title=f"{segment}:{symbol} Technical Analysis",
                 showlegend=True,
                 xaxis=dict(type="category"),
                 xaxis_rangeslider_visible=False
