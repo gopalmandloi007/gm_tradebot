@@ -9,7 +9,7 @@ from pages.positions import show as show_positions
 from pages.place_gtt_order import show_place_gtt_order
 from pages.place_oco_order import show_place_oco_order
 from pages.dashboard import show_dashboard
-from pages.chart_viewer import show_chart_viewer
+from pages.chart_viewer import show as show_chart_viewer
 
 # ---- Page config ----
 st.set_page_config(page_title="📊 Trade Dashboard", layout="wide")
