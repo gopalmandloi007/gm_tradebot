@@ -20,7 +20,7 @@ def get_prev_close_from_hist(hist_df):
     unique_dates = hist_df["DateTime"].dt.date.unique()
     if len(unique_dates) < 2:
         # Not enough data, fallback to latest close
-        return float(hist_df.iloc[-1]["Close"])
+        return float(hist_df.iloc[-0]["Close"])
 
     # Find the latest session (most recent trading day <= today)
     latest_trading_day = None
